@@ -196,6 +196,7 @@ class AdvancedTradingAlgorithm:
         
         for i in range(len(data)):
             current = data.iloc[i]
+            action = "WAIT"  # <-- Initialize action at the start
             
             # Detect market regime
             regime = self.detect_market_regime(data, i)
@@ -207,7 +208,7 @@ class AdvancedTradingAlgorithm:
             else:
                 primary_signal = self.momentum_signal(data, i)
                 secondary_signal = self.mean_reversion_signal(data, i)
-            
+        
             # Combine signals
             combined_signal = primary_signal["signal"]
             if primary_signal["signal"] == 0 and abs(secondary_signal["signal"]) > 0:
@@ -215,22 +216,6 @@ class AdvancedTradingAlgorithm:
             
             signal_strength = max(primary_signal["strength"], secondary_signal["strength"] * 0.5)
 
-            if action.startswith("EXIT"):
-                    # Calculate P&L
-                    if self.position == 1:  # Long position
-                        pnl_pct = (current['close'] - self.entry_price) / self.entry_price
-                    elif self.position == -1:  # Short position
-                        pnl_pct = (self.entry_price - current['close']) / self.entry_price
-                    else:
-                        pnl_pct = 0  # Just in case
-
-                    self.trades.append({
-                        'entry_price': self.entry_price,
-                        'exit_price': current['close'],
-                        'pnl_pct': pnl_pct,
-                        'exit_reason': action
-                    })
-            
             # Position management
             if self.position == 0 and combined_signal != 0:
                 # Enter position
@@ -262,27 +247,39 @@ class AdvancedTradingAlgorithm:
                      (self.position == -1 and combined_signal > 0.5):
                     action = "EXIT_SIGNAL"
                     self.position = 0
-                
-                
+        
+        # Calculate P&L and record trade if exited
+        if action.startswith("EXIT"):
+            if self.position == 1:  # Long position
+                pnl_pct = (current['close'] - self.entry_price) / self.entry_price
+            elif self.position == -1:  # Short position
+                pnl_pct = (self.entry_price - current['close']) / self.entry_price
             else:
-                action = "WAIT"
-            
-            # Store results
-            results.append({
-                'timestamp': current.name if hasattr(current, 'name') else i,
-                'close': current['close'],
-                'regime': regime,
-                'signal': combined_signal,
-                'signal_strength': signal_strength,
-                'position': self.position,
-                'action': action,
-                'entry_price': self.entry_price if self.position != 0 else None,
-                'stop_loss': self.stop_loss if self.position != 0 else None,
-                'take_profit': self.take_profit if self.position != 0 else None,
-                'primary_reason': primary_signal.get("reason", ""),
-                'secondary_reason': secondary_signal.get("reason", "")
+                pnl_pct = 0  # Just in case
+
+            self.trades.append({
+                'entry_price': self.entry_price,
+                'exit_price': current['close'],
+                'pnl_pct': pnl_pct,
+                'exit_reason': action
             })
         
+        # Store results
+        results.append({
+            'timestamp': current.name if hasattr(current, 'name') else i,
+            'close': current['close'],
+            'regime': regime,
+            'signal': combined_signal,
+            'signal_strength': signal_strength,
+            'position': self.position,
+            'action': action,
+            'entry_price': self.entry_price if self.position != 0 else None,
+            'stop_loss': self.stop_loss if self.position != 0 else None,
+            'take_profit': self.take_profit if self.position != 0 else None,
+            'primary_reason': primary_signal.get("reason", ""),
+            'secondary_reason': secondary_signal.get("reason", "")
+        })
+    
         return pd.DataFrame(results)
     
     def get_performance_metrics(self) -> Dict:
