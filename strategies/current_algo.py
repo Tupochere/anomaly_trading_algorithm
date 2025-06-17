@@ -19,7 +19,30 @@ class AdvancedTradingAlgorithm:
         self.take_profit = 0
         self.trades = []
         self.market_regime = "NEUTRAL"
-        
+        self.trailing_activated = False
+        self.trailing_buffer = 1.5  # in ATR units
+        self.trailing_trigger = 2.0  # price must move 2× ATR before we start trailing
+
+    def update_trailing_stop(self, data: pd.DataFrame, idx: int):
+        """Dynamically adjust stop-loss once price moves far enough in favor"""
+        current = data.iloc[idx]
+        atr = current['ATR']
+
+        if self.position == 1:
+            gain = current['close'] - self.entry_price
+            if gain > atr * self.trailing_trigger:
+                self.trailing_activated = True
+                new_stop = current['close'] - atr * self.trailing_buffer
+                self.stop_loss = max(self.stop_loss, new_stop)  # Don't lower stop
+        elif self.position == -1:
+           gain = self.entry_price - current['close']
+           if gain > atr * self.trailing_trigger:
+                self.trailing_activated = True
+                new_stop = current['close'] + atr * self.trailing_buffer
+                self.stop_loss = min(self.stop_loss, new_stop)  # Don't raise stop
+
+
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate all technical indicators"""
         data = df.copy()
@@ -190,6 +213,9 @@ class AdvancedTradingAlgorithm:
         
         return stop_loss, take_profit
     
+
+    
+
     def execute_strategy(self, data: pd.DataFrame) -> pd.DataFrame:
         """Main strategy execution"""
         results = []
@@ -227,6 +253,7 @@ class AdvancedTradingAlgorithm:
                 action = "BUY" if self.position == 1 else "SELL"
                 
             elif self.position != 0:
+                self.update_trailing_stop(data, i)
                 # Check exit conditions
                 action = "HOLD"
                 
@@ -247,7 +274,8 @@ class AdvancedTradingAlgorithm:
                      (self.position == -1 and combined_signal > 0.5):
                     action = "EXIT_SIGNAL"
                     self.position = 0
-        
+            
+
         # Calculate P&L and record trade if exited
         if action.startswith("EXIT"):
             if self.position == 1:  # Long position
