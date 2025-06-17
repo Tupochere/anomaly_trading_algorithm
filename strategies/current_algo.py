@@ -304,8 +304,10 @@ class AdvancedTradingAlgorithm:
             'entry_price': self.entry_price if self.position != 0 else None,
             'stop_loss': self.stop_loss if self.position != 0 else None,
             'take_profit': self.take_profit if self.position != 0 else None,
+            'position_size': position_size if self.position != 0 else None,
             'primary_reason': primary_signal.get("reason", ""),
             'secondary_reason': secondary_signal.get("reason", "")
+            
         })
     
         return pd.DataFrame(results)
