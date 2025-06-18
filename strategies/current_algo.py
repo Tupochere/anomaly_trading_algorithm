@@ -124,14 +124,14 @@ class AdvancedTradingAlgorithm:
         
         # Dynamic thresholds based on volatility
         volatility_factor = min(current['ATR'] / current['close'] * 100, 3)  # Cap at 3%
-        entry_threshold = 1.5 + volatility_factor * 0.3
+        entry_threshold = 1.0 + volatility_factor * 0.2
         
         signal = 0
         strength = 0
         reason = ""
         
         # Long signal (oversold)
-        if z_score < -entry_threshold and rsi < 35 and bb_position < 0.2:
+        if z_score < -entry_threshold and rsi < 45 and bb_position < 0.2:
             signal = 1
             strength = min(abs(z_score) / 3, 1.0)
             reason = f"oversold: z={z_score:.2f}, rsi={rsi:.1f}"
