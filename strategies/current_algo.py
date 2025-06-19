@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class AdvancedTradingAlgorithm:
-    def __init__(self, lookback_period: int = 252):
+    def __init__(self, lookback_period: int = 252, debug : bool = False):
         self.lookback_period = lookback_period
         self.position = 0  # 0: neutral, 1: long, -1: short
         self.entry_price = 0
@@ -22,7 +22,14 @@ class AdvancedTradingAlgorithm:
         self.trailing_activated = False
         self.trailing_buffer = 1.5  # in ATR units
         self.trailing_trigger = 2.0  # price must move 2× ATR before we start trailing
+        self.debug = debug
 
+
+    def log(self, message):
+      if self.debug:
+          print(message)
+
+      
     def update_trailing_stop(self, data: pd.DataFrame, idx: int):
         """Dynamically adjust stop-loss once price moves far enough in favor"""
         current = data.iloc[idx]
@@ -219,96 +226,134 @@ class AdvancedTradingAlgorithm:
     def execute_strategy(self, data: pd.DataFrame) -> pd.DataFrame:
         """Main strategy execution"""
         results = []
-        
+        entry_index = None  # Track when we entered positions
+    
         for i in range(len(data)):
             current = data.iloc[i]
-            action = "WAIT"  # <-- Initialize action at the start
+            action = "WAIT"  # Default action
+            position_size = None  # Initialize position size
             
-            # Detect market regime
+            # 1. Detect market regime
             regime = self.detect_market_regime(data, i)
             
-            # Get signals from different strategies
+            # 2. Generate signals based on regime
             if regime in ["RANGING", "NEUTRAL"]:
                 primary_signal = self.mean_reversion_signal(data, i)
-                secondary_signal = {"signal": 0, "strength": 0}
+                secondary_signal = {"signal": 0, "strength": 0, "reason": "N/A"}
             else:
                 primary_signal = self.momentum_signal(data, i)
                 secondary_signal = self.mean_reversion_signal(data, i)
-        
-            # Combine signals
+            
+            # 3. Combine signals
             combined_signal = primary_signal["signal"]
             if primary_signal["signal"] == 0 and abs(secondary_signal["signal"]) > 0:
                 combined_signal = secondary_signal["signal"] * 0.5  # Reduced strength
             
             signal_strength = max(primary_signal["strength"], secondary_signal["strength"] * 0.5)
+            
+            # Prepare debug reasons
+            primary_reason = primary_signal.get("reason", "No reason")
+            secondary_reason = secondary_signal.get("reason", "No reason")
+            exit_price = None  # Initialize exit price
 
-            # Position management
+            # 4. Position entry logic
             if self.position == 0 and combined_signal != 0:
                 # Enter position
                 self.position = 1 if combined_signal > 0 else -1
                 self.entry_price = current['close']
                 position_size = self.calculate_position_size(data, i, signal_strength)
                 self.stop_loss, self.take_profit = self.calculate_stops(data, i, self.position, self.entry_price)
-                
+                self.trailing_activated = False
                 action = "BUY" if self.position == 1 else "SELL"
+                entry_index = i  # Track when we entered
                 
+                # Debug logging for entries
+                if self.debug:
+                    self.log(f"\n=== ENTER {action} at {current['close']:.2f} (Bar {i}) ===")
+                    self.log(f"Primary Signal: {primary_reason}")
+                    self.log(f"Secondary Signal: {secondary_reason}")
+                    self.log(f"Position Size: {position_size:.4f}")
+                    self.log(f"Stop Loss: {self.stop_loss:.2f}, Take Profit: {self.take_profit:.2f}")
+            
+            # 5. Position management
             elif self.position != 0:
+                # Update trailing stops
                 self.update_trailing_stop(data, i)
-                # Check exit conditions
                 action = "HOLD"
                 
+                # Check exit conditions
+                exit_condition = None
+                
                 # Stop loss hit
-                if (self.position == 1 and current['close'] <= self.stop_loss) or \
-                   (self.position == -1 and current['close'] >= self.stop_loss):
+                if (self.position == 1 and current['low'] <= self.stop_loss) or \
+                (self.position == -1 and current['high'] >= self.stop_loss):
                     action = "EXIT_STOP"
-                    self.position = 0
+                    exit_price = self.stop_loss
+                    exit_condition = "Stop loss"
                 
                 # Take profit hit
-                elif (self.position == 1 and current['close'] >= self.take_profit) or \
-                     (self.position == -1 and current['close'] <= self.take_profit):
+                elif (self.position == 1 and current['high'] >= self.take_profit) or \
+                    (self.position == -1 and current['low'] <= self.take_profit):
                     action = "EXIT_PROFIT"
-                    self.position = 0
+                    exit_price = self.take_profit
+                    exit_condition = "Take profit"
                 
-                # Regime change exit
+                # Signal-based exit
                 elif (self.position == 1 and combined_signal < -0.5) or \
-                     (self.position == -1 and combined_signal > 0.5):
+                    (self.position == -1 and combined_signal > 0.5):
                     action = "EXIT_SIGNAL"
+                    exit_price = current['close']
+                    exit_condition = "Signal reversal"
+                
+                # Handle exits
+                if exit_condition:
+                    # Calculate P&L
+                    if self.position == 1:  # Long position
+                        pnl_pct = (exit_price - self.entry_price) / self.entry_price
+                    else:  # Short position
+                        pnl_pct = (self.entry_price - exit_price) / self.entry_price
+                    
+                    # Record trade
+                    self.trades.append({
+                        'entry_price': self.entry_price,
+                        'exit_price': exit_price,
+                        'pnl_pct': pnl_pct,
+                        'exit_reason': action,
+                        'entry_time': data.index[entry_index] if entry_index is not None else data.index[i],
+                        'exit_time': data.index[i],
+                        'duration': i - entry_index if entry_index is not None else 0
+                    })
+                    
+                    # Debug logging for exits
+                    if self.debug:
+                        duration = i - entry_index if entry_index is not None else "N/A"
+                        self.log(f"\n=== EXIT {action} at {exit_price:.2f} (Bar {i}) ===")
+                        self.log(f"Reason: {exit_condition}")
+                        self.log(f"Entry Price: {self.entry_price:.2f}")
+                        self.log(f"Position Duration: {duration} bars")
+                        self.log(f"P&L: {pnl_pct:.2%}")
+                    
+                    # Reset position
                     self.position = 0
+                    entry_index = None
             
-
-        # Calculate P&L and record trade if exited
-        if action.startswith("EXIT"):
-            if self.position == 1:  # Long position
-                pnl_pct = (current['close'] - self.entry_price) / self.entry_price
-            elif self.position == -1:  # Short position
-                pnl_pct = (self.entry_price - current['close']) / self.entry_price
-            else:
-                pnl_pct = 0  # Just in case
-
-            self.trades.append({
-                'entry_price': self.entry_price,
-                'exit_price': current['close'],
-                'pnl_pct': pnl_pct,
-                'exit_reason': action
+            # 6. Record results for this bar
+            results.append({
+                'timestamp': current.name if hasattr(current, 'name') else i,
+                'close': current['close'],
+                'regime': regime,
+                'signal': combined_signal,
+                'signal_strength': signal_strength,
+                'position': self.position,
+                'action': action,
+                'entry_price': self.entry_price if self.position != 0 else None,
+                'stop_loss': self.stop_loss if self.position != 0 else None,
+                'take_profit': self.take_profit if self.position != 0 else None,
+                'position_size': position_size,
+                'primary_reason': primary_reason,
+                'secondary_reason': secondary_reason
+                
             })
-        
-        # Store results
-        results.append({
-            'timestamp': current.name if hasattr(current, 'name') else i,
-            'close': current['close'],
-            'regime': regime,
-            'signal': combined_signal,
-            'signal_strength': signal_strength,
-            'position': self.position,
-            'action': action,
-            'entry_price': self.entry_price if self.position != 0 else None,
-            'stop_loss': self.stop_loss if self.position != 0 else None,
-            'take_profit': self.take_profit if self.position != 0 else None,
-            'position_size': position_size if self.position != 0 else None,
-            'primary_reason': primary_signal.get("reason", ""),
-            'secondary_reason': secondary_signal.get("reason", "")
-            
-        })
     
         return pd.DataFrame(results)
     
