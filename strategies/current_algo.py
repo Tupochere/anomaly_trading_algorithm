@@ -186,16 +186,30 @@ class AdvancedTradingAlgorithm:
         
         return {"signal": signal, "strength": strength, "reason": reason}
     
-    def calculate_position_size(self, final_score, threshold=0.7, base_size=0.06, max_size=0.12):
+    def calculate_position_size(self, final_score, volatility, threshold=0.3, base_size=0.06, max_size=0.12, min_size=0.03):
         """
-        Dynamically scale position size based on final signal score.
+        Calculate position size based on signal strength and volatility.
+        - final_score: final signal score (0 to 1)
+        - volatility: normalized ATR as fraction of price (e.g., 0.02 means 2%)
         """
-        score_gap = abs(final_score) - threshold
-        if score_gap <= 0:
-            return base_size
-        size_multiplier = min(max(score_gap / (1 - threshold), 0), 1)
-        dynamic_size = base_size + (max_size - base_size) * size_multiplier
-        return round(dynamic_size, 4)
+        if final_score <= threshold:
+            scaled_size = base_size
+        else:
+            score_factor = min((final_score - threshold) / (1.0 - threshold), 1.0)
+            scaled_size = base_size + score_factor * (max_size - base_size)
+
+        # Volatility adjustment
+        if volatility > 0.03:  # High volatility (>3%)
+            vol_factor = 0.7  # reduce position
+        elif volatility < 0.015:  # Low volatility (<1.5%)
+            vol_factor = 1.2  # slightly increase
+        else:
+            vol_factor = 1.0
+
+        final_size = scaled_size * vol_factor
+        final_size = max(min(final_size, max_size), min_size)
+
+        return round(final_size, 4)
     
     def calculate_stops(self, data: pd.DataFrame, idx: int, signal: int, entry_price: float) -> Tuple[float, float]:
         """Dynamic stop loss and take profit calculation with a max stop-loss cap"""
@@ -269,9 +283,13 @@ class AdvancedTradingAlgorithm:
                 self.position = 1 if combined_signal > 0 else -1
                 self.entry_price = current['close']
                 
-                # Use new dynamic position sizing based on actual signal score
-                # Adjust threshold to match new generate_signal logic (0.3 instead of 0.7)
-                position_size = self.calculate_position_size(signal_strength_score, threshold=0.3)
+                # Calculate normalized volatility for position sizing
+                current_atr = current['ATR']
+                current_price = current['close']
+                normalized_volatility = current_atr / current_price
+                
+                # Use enhanced volatility-aware position sizing
+                position_size = self.calculate_position_size(signal_strength_score, normalized_volatility, threshold=0.3)
                 
                 action = "BUY" if self.position == 1 else "SELL"
                 entry_index = i  # Track when we entered
@@ -282,7 +300,7 @@ class AdvancedTradingAlgorithm:
                     self.log(f"\n=== ENTER {action} at {current['close']:.2f} (Bar {i}) ===")
                     self.log(f"Primary Signal: {primary_reason}")
                     self.log(f"Secondary Signal: {secondary_reason}")
-                    self.log(f"✅ Dynamic position size computed: {position_size:.4f} (Score: {signal_strength_score:.2f}, Threshold: 0.3)")
+                    self.log(f"Final Score: {signal_strength_score:.2f} | Volatility: {normalized_volatility:.3f} | Position Size: {position_size:.4f}")
                     self.log(f"Using improved dynamic exit logic")
             
             # 5. Position management

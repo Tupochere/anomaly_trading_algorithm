@@ -8,7 +8,7 @@
     "win_rate": 0.5454545454545454,
     "profit_factor": 5.8020887504641285,
     "total_trades": 88,
-    "timestamp": "2025-06-29T13:01:35.229421"
+    "timestamp": "2025-06-29T13:55:03.761141"
   },
   "AAPL_2y": {
     "symbol": "AAPL",
@@ -19,7 +19,7 @@
     "win_rate": 0.6056338028169014,
     "profit_factor": 10.331049776252552,
     "total_trades": 142,
-    "timestamp": "2025-06-29T13:01:37.618649"
+    "timestamp": "2025-06-29T13:55:06.852297"
   },
   "MSFT_1y": {
     "symbol": "MSFT",
@@ -30,7 +30,7 @@
     "win_rate": 0.6338028169014085,
     "profit_factor": 9.152841862857345,
     "total_trades": 71,
-    "timestamp": "2025-06-29T13:01:39.285903"
+    "timestamp": "2025-06-29T13:55:08.750058"
   },
   "MSFT_2y": {
     "symbol": "MSFT",
@@ -41,7 +41,7 @@
     "win_rate": 0.5634920634920635,
     "profit_factor": 6.4928343662974415,
     "total_trades": 126,
-    "timestamp": "2025-06-29T13:01:41.752855"
+    "timestamp": "2025-06-29T13:55:11.728835"
   },
   "SPY_1y": {
     "symbol": "SPY",
@@ -52,7 +52,7 @@
     "win_rate": 0.5054945054945055,
     "profit_factor": 3.9391962688532143,
     "total_trades": 91,
-    "timestamp": "2025-06-29T13:01:43.463441"
+    "timestamp": "2025-06-29T13:55:13.961560"
   },
   "SPY_2y": {
     "symbol": "SPY",
@@ -63,7 +63,7 @@
     "win_rate": 0.5031055900621118,
     "profit_factor": 3.3991051351284733,
     "total_trades": 161,
-    "timestamp": "2025-06-29T13:01:45.779124"
+    "timestamp": "2025-06-29T13:55:16.873324"
   },
   "GOOGL_1y": {
     "symbol": "GOOGL",
@@ -74,7 +74,7 @@
     "win_rate": 0.5443037974683544,
     "profit_factor": 12.652666621569479,
     "total_trades": 79,
-    "timestamp": "2025-06-29T13:01:47.387615"
+    "timestamp": "2025-06-29T13:55:18.797748"
   },
   "GOOGL_2y": {
     "symbol": "GOOGL",
@@ -85,6 +85,6 @@
     "win_rate": 0.4855072463768116,
     "profit_factor": 4.768812993787736,
     "total_trades": 138,
-    "timestamp": "2025-06-29T13:01:49.718886"
+    "timestamp": "2025-06-29T13:55:21.886436"
   }
 }
