@@ -23,11 +23,12 @@ class AdvancedTradingAlgorithm:
         self.trailing_buffer = 1.5  # in ATR units
         self.trailing_trigger = 2.0  # price must move 2× ATR before we start trailing
         self.debug = debug
+        self.max_stop_pct = 0.1  # Max 10% stop loss to avoid large risks
 
 
     def log(self, message):
-      if self.debug:
-          print(message)
+        if self.debug:
+            print(message)
 
       
     def update_trailing_stop(self, data: pd.DataFrame, idx: int):
@@ -51,47 +52,41 @@ class AdvancedTradingAlgorithm:
 
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-
         """Calculate all technical indicators"""
         data = df.copy()
-        
+
         # Moving Averages
         data['SMA_20'] = ta.trend.sma_indicator(data['close'], window=20)
         data['SMA_50'] = ta.trend.sma_indicator(data['close'], window=50)
         data['SMA_200'] = ta.trend.sma_indicator(data['close'], window=200)
         data['EMA_12'] = ta.trend.ema_indicator(data['close'], window=12)
         data['EMA_26'] = ta.trend.ema_indicator(data['close'], window=26)
-        
+
         # Volatility Indicators
         data['ATR'] = ta.volatility.average_true_range(data['high'], data['low'], data['close'], window=14)
         bb_indicator = ta.volatility.BollingerBands(data['close'])
         data['BB_upper'] = bb_indicator.bollinger_hband()
-        data['BB_middle'] = bb_indicator.bollinger_mavg() 
+        data['BB_middle'] = bb_indicator.bollinger_mavg()
         data['BB_lower'] = bb_indicator.bollinger_lband()
         data['BB_width'] = (data['BB_upper'] - data['BB_lower']) / data['BB_middle']
-        
+
         # Momentum Indicators
         data['RSI'] = ta.momentum.rsi(data['close'], window=14)
         macd_indicator = ta.trend.MACD(data['close'])
         data['MACD'] = macd_indicator.macd_diff()
         data['MACD_signal'] = macd_indicator.macd_signal()
         data['ADX'] = ta.trend.adx(data['high'], data['low'], data['close'], window=14)
-        
+
         # Volume Indicators
         if 'volume' in data.columns:
             data['Volume_SMA'] = data['volume'].rolling(window=20).mean()
             data['OBV'] = ta.volume.on_balance_volume(data['close'], data['volume'])
-        
+
         # Custom Indicators
         data['Price_STD'] = data['close'].rolling(window=20).std()
         data['Z_Score'] = (data['close'] - data['SMA_20']) / data['Price_STD']
         data['Trend_Strength'] = abs(data['SMA_20'] - data['SMA_50']) / data['ATR']
-        
-        data['Trend_Strength'] = np.where(
-        data['ATR'] > 0,
-        abs(data['SMA_20'] - data['SMA_50']) / data['ATR'],
-        0  # Fallback for zero ATR
-       )
+
         return data
     
     def detect_market_regime(self, data: pd.DataFrame, idx: int) -> str:
@@ -137,7 +132,7 @@ class AdvancedTradingAlgorithm:
         
         # Dynamic thresholds based on volatility
         volatility_factor = min(current['ATR'] / current['close'] * 100, 3)  # Cap at 3%
-        entry_threshold = 1.0 + volatility_factor * 0.2
+        entry_threshold = 1.5 + volatility_factor * 0.2  # Refined threshold
         
         signal = 0
         strength = 0
@@ -288,118 +283,58 @@ class AdvancedTradingAlgorithm:
         return stop_loss, take_profit
 
     def execute_strategy(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Main strategy execution with adaptive signal confirmation"""
+        """Main strategy execution"""
         results = []
-        entry_index = None
+        entry_index = None  # Track when we entered positions
         
         for i in range(len(data)):
             current = data.iloc[i]
-            action = "WAIT"
-            position_size = None
+            action = "WAIT"  # Default action
+            position_size = None  # Initialize position size
             
             # 1. Detect market regime
             regime = self.detect_market_regime(data, i)
             
-            # 2. Always generate both signals regardless of regime
-            primary_signal = self.mean_reversion_signal(data, i)
-            secondary_signal = self.momentum_signal(data, i)
-            
-            # 3. Determine confirmation requirements based on regime
-            if regime in ["STRONG_UPTREND", "STRONG_DOWNTREND", "HIGH_VOLATILITY"]:
-                required_confirmations = 2
+            # 2. Generate signals based on regime
+            if regime in ["RANGING", "NEUTRAL"]:
+                primary_signal = self.mean_reversion_signal(data, i)
+                secondary_signal = {"signal": 0, "strength": 0, "reason": "N/A"}
             else:
-                required_confirmations = 1  # Only need 1 confirmation in neutral/ranging
+                primary_signal = self.momentum_signal(data, i)
+                secondary_signal = self.mean_reversion_signal(data, i)
             
-            # 4. Build confirmations list
-            confirmations = []
-            signal_reasons = []
+            # 3. Combine signals
+            combined_signal = primary_signal["signal"]
+            if primary_signal["signal"] == 0 and abs(secondary_signal["signal"]) > 0:
+                combined_signal = secondary_signal["signal"] * 0.5  # Reduced strength
             
-            # Primary signal
-            if primary_signal["signal"] != 0:
-                confirmations.append({
-                    "type": "primary",
-                    "signal": primary_signal["signal"],
-                    "strength": primary_signal["strength"],
-                    "reason": primary_signal["reason"]
-                })
+            signal_strength = max(primary_signal["strength"], secondary_signal["strength"] * 0.5)
             
-            # Secondary signal
-            if secondary_signal["signal"] != 0:
-                confirmations.append({
-                    "type": "secondary",
-                    "signal": secondary_signal["signal"],
-                    "strength": secondary_signal["strength"],
-                    "reason": secondary_signal["reason"]
-                })
-            
-            # Regime-based confirmation (for all non-neutral regimes)
-            if regime != "NEUTRAL":
-                regime_signal = 0
-                if "UP" in regime or "BULL" in regime:
-                    regime_signal = 1
-                elif "DOWN" in regime or "BEAR" in regime:
-                    regime_signal = -1
-                    
-                if regime_signal != 0:
-                    confirmations.append({
-                        "type": "regime",
-                        "signal": regime_signal,
-                        "strength": 0.7,
-                        "reason": regime.lower()
-                    })
-            
-            # 5. Signal processing
-            combined_signal = 0
-            signal_strength = 0
-            
-            # Case 1: Meet confirmation requirements
-            if len(confirmations) >= required_confirmations:
-                signals = [c["signal"] for c in confirmations]
-                if all(s == 1 for s in signals) or all(s == -1 for s in signals):
-                    combined_signal = signals[0]
-                    signal_strength = np.mean([c["strength"] for c in confirmations])
-                    signal_reasons = [f"{c['type']}: {c['reason']}" for c in confirmations]
-            
-            # Case 2: Strong single signal fallback
-            elif len(confirmations) == 1 and confirmations[0]["strength"] > 0.8:
-                combined_signal = confirmations[0]["signal"]
-                signal_strength = confirmations[0]["strength"]
-                signal_reasons = [f"strong_single: {confirmations[0]['reason']}"]
-            
-            # 6. Block counter-trend trades in strong regimes
-            if (regime == "STRONG_UPTREND" and combined_signal == -1) or \
-               (regime == "STRONG_DOWNTREND" and combined_signal == 1):
-                combined_signal = 0
-                signal_reasons = ["counter-trend blocked"]
+            # Prepare debug reasons
+            primary_reason = primary_signal.get("reason", "No reason")
+            secondary_reason = secondary_signal.get("reason", "No reason")
+            exit_price = None  # Initialize exit price
 
-            # 7. Position entry logic
+            # 4. Position entry logic
             if self.position == 0 and combined_signal != 0:
                 # Enter position
                 self.position = 1 if combined_signal > 0 else -1
                 self.entry_price = current['close']
                 position_size = self.calculate_position_size(data, i, signal_strength)
-                
-                # Pass current regime to stop calculation
-                self.stop_loss, self.take_profit = self.calculate_stops(
-                    data, i, self.position, self.entry_price, regime
-                )
-                
+                self.stop_loss, self.take_profit = self.calculate_stops(data, i, self.position, self.entry_price, regime)
                 self.trailing_activated = False
                 action = "BUY" if self.position == 1 else "SELL"
-                entry_index = i
+                entry_index = i  # Track when we entered
                 
+                # Debug logging for entries
                 if self.debug:
                     self.log(f"\n=== ENTER {action} at {current['close']:.2f} (Bar {i}) ===")
-                    self.log("Signal Confirmations:")
-                    for reason in signal_reasons:
-                        self.log(f"  - {reason}")
+                    self.log(f"Primary Signal: {primary_reason}")
+                    self.log(f"Secondary Signal: {secondary_reason}")
                     self.log(f"Position Size: {position_size:.4f}")
-                    self.log(f"Stop Loss: {self.stop_loss:.2f} ({self.stop_loss/current['close']-1:.2%})")
-                    self.log(f"Take Profit: {self.take_profit:.2f} ({self.take_profit/current['close']-1:.2%})")
-                    self.log(f"ATR: {current['ATR']:.2f}, Volatility: {current['ATR']/current['close']:.2%}")
-                    self.log(f"Regime: {regime}, Trend Strength: {current.get('Trend_Strength', 0):.2f}")
+                    self.log(f"Stop Loss: {self.stop_loss:.2f}, Take Profit: {self.take_profit:.2f}")
             
-            # 8. Position management
+            # 5. Position management
             elif self.position != 0:
                 # Update trailing stops
                 self.update_trailing_stop(data, i)
@@ -407,28 +342,33 @@ class AdvancedTradingAlgorithm:
                 
                 # Check exit conditions
                 exit_condition = None
-                exit_price = None
                 
                 # Stop loss hit
                 if (self.position == 1 and current['low'] <= self.stop_loss) or \
-                   (self.position == -1 and current['high'] >= self.stop_loss):
+                (self.position == -1 and current['high'] >= self.stop_loss):
                     action = "EXIT_STOP"
                     exit_price = self.stop_loss
                     exit_condition = "Stop loss"
                 
                 # Take profit hit
                 elif (self.position == 1 and current['high'] >= self.take_profit) or \
-                     (self.position == -1 and current['low'] <= self.take_profit):
+                    (self.position == -1 and current['low'] <= self.take_profit):
                     action = "EXIT_PROFIT"
                     exit_price = self.take_profit
                     exit_condition = "Take profit"
                 
                 # Signal-based exit
                 elif (self.position == 1 and combined_signal < -0.5) or \
-                     (self.position == -1 and combined_signal > 0.5):
+                    (self.position == -1 and combined_signal > 0.5):
                     action = "EXIT_SIGNAL"
                     exit_price = current['close']
                     exit_condition = "Signal reversal"
+                
+                # Max duration exit
+                elif entry_index is not None and (i - entry_index) >= 50:
+                    action = "EXIT_DURATION"
+                    exit_price = current['close']
+                    exit_condition = "Max duration exceeded"
                 
                 # Handle exits
                 if exit_condition:
@@ -462,7 +402,7 @@ class AdvancedTradingAlgorithm:
                     self.position = 0
                     entry_index = None
             
-            # 9. Record results for this bar
+            # 6. Record results for this bar
             results.append({
                 'timestamp': current.name if hasattr(current, 'name') else i,
                 'close': current['close'],
@@ -475,9 +415,8 @@ class AdvancedTradingAlgorithm:
                 'stop_loss': self.stop_loss if self.position != 0 else None,
                 'take_profit': self.take_profit if self.position != 0 else None,
                 'position_size': position_size,
-                'primary_reason': primary_signal.get("reason", "No reason"),
-                'secondary_reason': secondary_signal.get("reason", "No reason"),
-                'signal_confirmations': ", ".join(signal_reasons) if signal_reasons else "None"
+                'primary_reason': primary_reason,
+                'secondary_reason': secondary_reason
             })
     
         return pd.DataFrame(results)
