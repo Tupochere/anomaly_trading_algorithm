@@ -186,22 +186,16 @@ class AdvancedTradingAlgorithm:
         
         return {"signal": signal, "strength": strength, "reason": reason}
     
-    def calculate_position_size(self, data: pd.DataFrame, idx: int, signal_strength: float) -> float:
-        """Dynamic position sizing based on volatility and confidence"""
-        current = data.iloc[idx]
-        
-        # Base position size (1.0 = 100% of available capital)
-        base_size = 0.1  # Conservative base
-        
-        # Adjust for signal strength
-        strength_multiplier = 0.5 + (signal_strength * 1.5)  # 0.5x to 2x
-        
-        # Adjust for volatility (lower size in high vol)
-        volatility_factor = current['ATR'] / current['close']
-        vol_multiplier = max(0.3, 1 - (volatility_factor * 20))  # Cap between 0.3x and 1x
-        
-        position_size = base_size * strength_multiplier * vol_multiplier
-        return min(position_size, 0.25)  # Never risk more than 25%
+    def calculate_position_size(self, final_score, threshold=0.7, base_size=0.06, max_size=0.12):
+        """
+        Dynamically scale position size based on final signal score.
+        """
+        score_gap = abs(final_score) - threshold
+        if score_gap <= 0:
+            return base_size
+        size_multiplier = min(max(score_gap / (1 - threshold), 0), 1)
+        dynamic_size = base_size + (max_size - base_size) * size_multiplier
+        return round(dynamic_size, 4)
     
     def calculate_stops(self, data: pd.DataFrame, idx: int, signal: int, entry_price: float) -> Tuple[float, float]:
         """Dynamic stop loss and take profit calculation with a max stop-loss cap"""
@@ -236,8 +230,9 @@ class AdvancedTradingAlgorithm:
             # 1. Detect market regime
             regime = self.detect_market_regime(data, i)
             
-            # 2. Generate smart combined signal
+            # 2. Generate smart combined signal with strength
             combined_signal = self.generate_signal(data, i)
+            signal_direction, signal_strength_score = self.get_signal_with_strength(data, i)
             
             # Get individual signals for debugging
             primary_signal = self.mean_reversion_signal(data, i)
@@ -273,7 +268,11 @@ class AdvancedTradingAlgorithm:
                 # Enter position
                 self.position = 1 if combined_signal > 0 else -1
                 self.entry_price = current['close']
-                position_size = self.calculate_position_size(data, i, signal_strength)
+                
+                # Use new dynamic position sizing based on actual signal score
+                # Adjust threshold to match new generate_signal logic (0.3 instead of 0.7)
+                position_size = self.calculate_position_size(signal_strength_score, threshold=0.3)
+                
                 action = "BUY" if self.position == 1 else "SELL"
                 entry_index = i  # Track when we entered
                 price_history = [current['close']]  # Initialize price history
@@ -283,7 +282,7 @@ class AdvancedTradingAlgorithm:
                     self.log(f"\n=== ENTER {action} at {current['close']:.2f} (Bar {i}) ===")
                     self.log(f"Primary Signal: {primary_reason}")
                     self.log(f"Secondary Signal: {secondary_reason}")
-                    self.log(f"Position Size: {position_size:.4f}")
+                    self.log(f"✅ Dynamic position size computed: {position_size:.4f} (Score: {signal_strength_score:.2f}, Threshold: 0.3)")
                     self.log(f"Using improved dynamic exit logic")
             
             # 5. Position management
@@ -555,6 +554,67 @@ class AdvancedTradingAlgorithm:
             return True, 'EXIT_MAX_DURATION'
 
         return False, "Hold"
+    
+    def get_signal_with_strength(self, data: pd.DataFrame, idx: int) -> Tuple[int, float]:
+        """
+        Get both signal direction and the actual combined signal strength.
+        Returns: (direction: int, strength: float)
+        """
+        if idx < 26:  # Need enough data for all indicators
+            return 0, 0.0
+            
+        row = data.iloc[idx]
+        regime = self.detect_market_regime(data, idx)
+        
+        # Mean-reversion logic
+        z_score = row['Z_Score']
+        rsi = row['RSI']
+        bollinger_position = (row['close'] - row['BB_lower']) / (row['BB_upper'] - row['BB_lower'])
+
+        mean_rev_signal = 0
+        if z_score < -1.5 and rsi < 45 and bollinger_position < 0.2:
+            mean_rev_signal = 1  # Long candidate
+        elif z_score > 1.5 and rsi > 55 and bollinger_position > 0.8:
+            mean_rev_signal = -1  # Short candidate
+
+        # Mean-reversion strength
+        mean_rev_strength = min(abs(z_score) / 3, 1.0)  # Normalized cap
+
+        # Momentum logic
+        ema_diff = row['EMA_12'] - row['EMA_26']
+        macd = row['MACD']
+        macd_signal = row['MACD_signal']
+
+        momentum_signal = 0
+        if ema_diff > 0 and macd > macd_signal and rsi > 50:
+            momentum_signal = 1
+        elif ema_diff < 0 and macd < macd_signal and rsi < 50:
+            momentum_signal = -1
+
+        # Momentum strength
+        momentum_strength = min(abs(ema_diff / row['close']), 1.0)
+
+        # Combine
+        combined_signal = 0.5 * (mean_rev_signal * mean_rev_strength) + 0.5 * (momentum_signal * momentum_strength)
+
+        # Default threshold
+        threshold = 0.3
+
+        # Adjust threshold by regime
+        if regime == "STRONG_UPTREND":
+            threshold = 0.25  # Encourage longs
+        elif regime == "STRONG_DOWNTREND":
+            threshold = 0.25  # Encourage shorts
+        else:
+            threshold = 0.3
+
+        # Return direction and actual strength
+        if combined_signal >= threshold:
+            return 1, abs(combined_signal)  # Buy with strength
+        elif combined_signal <= -threshold:
+            return -1, abs(combined_signal)  # Sell with strength
+        else:
+            return 0, 0.0  # Hold
 
 # Example usage and backtesting function
 def backtest_algorithm(df: pd.DataFrame, show_details: bool = True):
