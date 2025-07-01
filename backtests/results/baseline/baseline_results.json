@@ -2,89 +2,45 @@
   "AAPL_1y": {
     "symbol": "AAPL",
     "period": "1y",
-    "total_return": 218.2678706961326,
-    "sharpe_ratio": 5.178989990692309,
-    "max_drawdown": 8.926894916047386,
-    "win_rate": 0.5454545454545454,
-    "profit_factor": 5.8020887504641285,
-    "total_trades": 88,
-    "timestamp": "2025-06-29T14:48:39.972249"
-  },
-  "AAPL_2y": {
-    "symbol": "AAPL",
-    "period": "2y",
-    "total_return": 515.5133072014758,
-    "sharpe_ratio": 6.57371508528734,
-    "max_drawdown": 8.926894916047353,
-    "win_rate": 0.6056338028169014,
-    "profit_factor": 10.331049776252552,
-    "total_trades": 142,
-    "timestamp": "2025-06-29T14:48:42.861440"
+    "total_return": 1198.679785889055,
+    "sharpe_ratio": 3.5784905877072233,
+    "max_drawdown": 368995.5202405074,
+    "win_rate": 0.5425531914893617,
+    "profit_factor": 3.476520297072696,
+    "total_trades": 282,
+    "timestamp": "2025-07-01T09:37:16.610303"
   },
   "MSFT_1y": {
     "symbol": "MSFT",
     "period": "1y",
-    "total_return": 183.0891506146895,
-    "sharpe_ratio": 6.598799796908037,
-    "max_drawdown": 9.81530204087111,
-    "win_rate": 0.6338028169014085,
-    "profit_factor": 9.152841862857345,
-    "total_trades": 71,
-    "timestamp": "2025-06-29T14:48:44.918245"
-  },
-  "MSFT_2y": {
-    "symbol": "MSFT",
-    "period": "2y",
-    "total_return": 452.84082526971173,
-    "sharpe_ratio": 5.584693607660063,
-    "max_drawdown": 21.88672545250406,
-    "win_rate": 0.5634920634920635,
-    "profit_factor": 6.4928343662974415,
-    "total_trades": 126,
-    "timestamp": "2025-06-29T14:48:47.835232"
+    "total_return": 1066.2774220832518,
+    "sharpe_ratio": 5.12281096569389,
+    "max_drawdown": 41.54607621407727,
+    "win_rate": 0.568904593639576,
+    "profit_factor": 4.6550659284241735,
+    "total_trades": 283,
+    "timestamp": "2025-07-01T09:37:23.551714"
   },
   "SPY_1y": {
     "symbol": "SPY",
     "period": "1y",
-    "total_return": 186.11826098441756,
-    "sharpe_ratio": 4.580482745031946,
-    "max_drawdown": 8.159871302812508,
-    "win_rate": 0.5054945054945055,
-    "profit_factor": 3.9391962688532143,
-    "total_trades": 91,
-    "timestamp": "2025-06-29T14:48:49.850900"
-  },
-  "SPY_2y": {
-    "symbol": "SPY",
-    "period": "2y",
-    "total_return": 225.47272071506907,
-    "sharpe_ratio": 3.821510676005611,
-    "max_drawdown": 22.15521396667076,
-    "win_rate": 0.5031055900621118,
-    "profit_factor": 3.3991051351284733,
-    "total_trades": 161,
-    "timestamp": "2025-06-29T14:48:52.673987"
+    "total_return": 637.5168464074085,
+    "sharpe_ratio": 4.346211112880821,
+    "max_drawdown": 27.80507544197209,
+    "win_rate": 0.5060975609756098,
+    "profit_factor": 3.495104450380813,
+    "total_trades": 328,
+    "timestamp": "2025-07-01T09:37:30.551156"
   },
   "GOOGL_1y": {
     "symbol": "GOOGL",
     "period": "1y",
-    "total_return": 271.91245782303446,
-    "sharpe_ratio": 7.367763608622548,
-    "max_drawdown": 6.864831897771122,
-    "win_rate": 0.5443037974683544,
-    "profit_factor": 12.652666621569479,
-    "total_trades": 79,
-    "timestamp": "2025-06-29T14:48:54.816659"
-  },
-  "GOOGL_2y": {
-    "symbol": "GOOGL",
-    "period": "2y",
-    "total_return": 351.3136037974242,
-    "sharpe_ratio": 4.916305892490021,
-    "max_drawdown": 31.750884237705346,
-    "win_rate": 0.4855072463768116,
-    "profit_factor": 4.768812993787736,
-    "total_trades": 138,
-    "timestamp": "2025-06-29T14:48:57.654747"
+    "total_return": 774.85595974477,
+    "sharpe_ratio": 4.82590733663736,
+    "max_drawdown": 32.42984785994015,
+    "win_rate": 0.5390625,
+    "profit_factor": 3.888387619375202,
+    "total_trades": 256,
+    "timestamp": "2025-07-01T09:37:37.323546"
   }
 }

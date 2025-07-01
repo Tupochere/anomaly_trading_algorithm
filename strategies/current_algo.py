@@ -2,13 +2,27 @@
 Advanced Adaptive Trading Algorithm
 Combines multiple strategies with market regime detection
 """
-
+from typing import Dict, Tuple, List
 import pandas as pd
 import numpy as np
 import ta
-from typing import Dict, Tuple, List
 import warnings
 warnings.filterwarnings('ignore')
+
+# Walk-Forward Testing Helper Functions
+def calculate_max_drawdown(equity_curve):
+    """Calculate maximum drawdown from equity curve."""
+    roll_max = equity_curve.cummax()
+    drawdown = (equity_curve - roll_max) / roll_max
+    return drawdown.min()
+
+def calculate_sharpe_ratio(pnl_series, risk_free_rate=0.0):
+    """Calculate annualized Sharpe ratio."""
+    mean_return = pnl_series.mean()
+    std_return = pnl_series.std()
+    if std_return == 0:
+        return 0.0
+    return (mean_return - risk_free_rate) / std_return * np.sqrt(252)
 
 class AdvancedTradingAlgorithm:
     def __init__(self, lookback_period: int = 252, debug : bool = False, max_stop_pct: float = 0.05):
@@ -269,7 +283,7 @@ class AdvancedTradingAlgorithm:
                 mean_rev = self.mean_reversion_signal(data, i)
                 momentum = self.momentum_signal(data, i)
                 primary_reason = f"Combined Score Signal: MR={mean_rev['signal']:.2f}*{mean_rev['strength']:.2f}, MOM={momentum['signal']:.2f}*{momentum['strength']:.2f}"
-                secondary_reason = f"Regime: {regime}, Final Score: {abs(combined_signal):.2f} (threshold: 0.7)"
+                secondary_reason = f"Regime: {regime}, Final Score: {signal_strength_score:.2f} (threshold: 0.7)"
             else:
                 mean_rev = self.mean_reversion_signal(data, i)
                 momentum = self.momentum_signal(data, i)
@@ -509,70 +523,6 @@ class AdvancedTradingAlgorithm:
         else:
             return 0  # Hold
 
-    def get_signal_reason(self, data: pd.DataFrame, idx: int, signal: int) -> str:
-        """Get detailed reason for signal generation"""
-        if signal == 0:
-            return "No signal - conditions not met"
-        
-        current = data.iloc[idx]
-        regime = self.detect_market_regime(data, idx)
-        z_score = current.get('Z_Score', 0)
-        rsi = current.get('RSI', 50)
-        
-        if signal == 1:
-            return f"BUY: {regime} regime, Z-Score={z_score:.2f}, RSI={rsi:.1f}"
-        else:
-            return f"SELL: {regime} regime, Z-Score={z_score:.2f}, RSI={rsi:.1f}"
-    
-    def should_exit(self, position, current_price, indicators, entry_price, atr, direction, bars_held=0, price_history=None):
-        """
-        Clean, strict exit logic with hard stops and clear profit targets.
-
-        Returns:
-            (exit_now: bool, reason: str)
-        """
-        # Calculate % P&L
-        if direction == "long":
-            pnl_pct = (current_price - entry_price) / entry_price
-        else:
-            pnl_pct = (entry_price - current_price) / entry_price
-
-        # ✅ Hard stop-loss: -5%
-        if pnl_pct < -0.05:
-            return True, 'EXIT_STOP_LOSS'
-
-        # ✅ Take-profit: +10%
-        if pnl_pct > 0.10:
-            return True, 'EXIT_TAKE_PROFIT'
-
-        # ✅ Trailing stop: trail by 2 × ATR
-        if direction == "long" and price_history is not None and len(price_history) > 0:
-            peak_price = max(price_history)
-            if current_price < peak_price - 2 * atr:
-                return True, 'EXIT_TRAILING_STOP'
-        elif direction == "short" and price_history is not None and len(price_history) > 0:
-            trough_price = min(price_history)
-            if current_price > trough_price + 2 * atr:
-                return True, 'EXIT_TRAILING_STOP'
-
-        # ✅ Momentum exit
-        rsi = indicators.get("RSI", 50)
-        macd = indicators.get("MACD", 0)
-        macd_signal = indicators.get("MACD_signal", 0)
-        
-        if direction == "long":
-            if rsi < 50 and macd < macd_signal:
-                return True, 'EXIT_MOMENTUM'
-        else:
-            if rsi > 50 and macd > macd_signal:
-                return True, 'EXIT_MOMENTUM'
-
-        # ✅ Max duration exit: 50 bars
-        if bars_held > 50:
-            return True, 'EXIT_MAX_DURATION'
-
-        return False, "Hold"
-    
     def get_signal_with_strength(self, data: pd.DataFrame, idx: int) -> Tuple[int, float]:
         """
         Get both signal direction and the actual combined signal strength.
@@ -634,106 +584,197 @@ class AdvancedTradingAlgorithm:
         else:
             return 0, 0.0  # Hold
 
-# Example usage and backtesting function
-def backtest_algorithm(df: pd.DataFrame, show_details: bool = True):
-    """
-    Backtest the advanced trading algorithm
-    
-    Parameters:
-    df: DataFrame with columns ['open', 'high', 'low', 'close', 'volume']
-    show_details: Whether to print detailed results
-    """
-    
-    # Initialize algorithm
-    algo = AdvancedTradingAlgorithm()
-    
-    # Calculate indicators
-    print("Calculating technical indicators...")
-    data_with_indicators = algo.calculate_indicators(df)
-    
-    # Execute strategy
-    print("Executing trading strategy...")
-    results = algo.execute_strategy(data_with_indicators)
-    
-    # Get performance metrics
-    performance = algo.get_performance_metrics()
-    
-    if show_details:
-        print("\n" + "="*50)
-        print("ALGORITHM PERFORMANCE SUMMARY")
-        print("="*50)
-        
-        if 'error' not in performance:
-            print(f"Total Trades: {performance['total_trades']}")
-            print(f"Win Rate: {performance['win_rate']:.2%}")
-            print(f"Total Return: {performance['total_return_pct']:.2f}%")
-            print(f"Average Win: {performance['avg_win_pct']:.2f}%")
-            print(f"Average Loss: {performance['avg_loss_pct']:.2f}%")
-            print(f"Profit Factor: {performance['profit_factor']:.2f}")
-            print(f"Max Consecutive Wins: {performance['max_consecutive_wins']}")
-            print(f"Max Consecutive Losses: {performance['max_consecutive_losses']}")
-            
-            # Show recent trades
-            print(f"\nRecent Trades (Last 5):")
-            for trade in algo.trades[-5:]:
-                print(f"Entry: ${trade['entry_price']:.2f} → Exit: ${trade['exit_price']:.2f} | "
-                      f"P&L: {trade['pnl_pct']:.2%} | Reason: {trade['exit_reason']}")
+    def should_exit(self, position, current_price, indicators, entry_price, atr, direction, bars_held=0, price_history=None):
+        """
+        Clean, strict exit logic with hard stops and clear profit targets.
+
+        Returns:
+            (exit_now: bool, reason: str)
+        """
+        # Calculate % P&L
+        if direction == "long":
+            pnl_pct = (current_price - entry_price) / entry_price
         else:
-            print(performance['error'])
-    
-    return results, performance, algo
+            pnl_pct = (entry_price - current_price) / entry_price
 
-# Sample data generator for testing
-def generate_sample_data(days: int = 252) -> pd.DataFrame:
-    """Generate sample OHLCV data for testing"""
-    np.random.seed(42)
-    dates = pd.date_range(start='2023-01-01', periods=days, freq='D')
-    
-    # Generate price data with some trends and noise
-    base_price = 100
-    prices = [base_price]
-    
-    for i in range(1, days):
-        # Add trend component and noise
-        trend = np.sin(i / 50) * 0.001  # Cyclical trend
-        noise = np.random.normal(0, 0.02)  # Daily volatility
-        change = trend + noise
-        new_price = prices[-1] * (1 + change)
-        prices.append(max(new_price, 1))  # Prevent negative prices
-    
-    # Generate OHLC from close prices
-    data = []
-    for i, close in enumerate(prices):
-        high = close * (1 + abs(np.random.normal(0, 0.01)))
-        low = close * (1 - abs(np.random.normal(0, 0.01)))
-        open_price = prices[i-1] if i > 0 else close
-        volume = np.random.randint(100000, 1000000)
+        # ✅ Hard stop-loss: -5%
+        if pnl_pct < -0.05:
+            return True, 'EXIT_STOP_LOSS'
+
+        # ✅ Take-profit: +10%
+        if pnl_pct > 0.10:
+            return True, 'EXIT_TAKE_PROFIT'
+
+        # ✅ Trailing stop: trail by 2 × ATR
+        if direction == "long" and price_history is not None and len(price_history) > 0:
+            peak_price = max(price_history)
+            if current_price < peak_price - 2 * atr:
+                return True, 'EXIT_TRAILING_STOP'
+        elif direction == "short" and price_history is not None and len(price_history) > 0:
+            trough_price = min(price_history)
+            if current_price > trough_price + 2 * atr:
+                return True, 'EXIT_TRAILING_STOP'
+
+        # ✅ Momentum exit
+        rsi = indicators.get("RSI", 50)
+        macd = indicators.get("MACD", 0)
+        macd_signal = indicators.get("MACD_signal", 0)
         
-        data.append({
-            'date': dates[i],
-            'open': open_price,
-            'high': max(open_price, high, close),
-            'low': min(open_price, low, close),
-            'close': close,
-            'volume': volume
-        })
-    
-    df = pd.DataFrame(data)
-    df.set_index('date', inplace=True)
-    return df
+        if direction == "long":
+            if rsi < 50 and macd < macd_signal:
+                return True, 'EXIT_MOMENTUM'
+        else:
+            if rsi > 50 and macd > macd_signal:
+                return True, 'EXIT_MOMENTUM'
 
-# Example execution
-if __name__ == "__main__":
-    print("Advanced Trading Algorithm - Demo")
-    print("Generating sample data...")
-    
-    # Generate sample data
-    sample_data = generate_sample_data(500)  # 500 days of data
-    
-    # Run backtest
-    results, performance, algorithm = backtest_algorithm(sample_data)
-    
-    print(f"\nAlgorithm completed analysis of {len(sample_data)} trading days")
-    print("Results stored in 'results' DataFrame")
-    print("Performance metrics in 'performance' dictionary")
-    print("Algorithm object available as 'algorithm'")
+        # ✅ Max duration exit: 50 bars
+        if bars_held > 50:
+            return True, 'EXIT_MAX_DURATION'
+
+        return False, "Hold"
+
+    def evaluate_performance(self, data):
+        """Evaluate performance on given data slice."""
+        # Calculate portfolio value and PnL from trades
+        initial_value = 100000  # Starting capital
+        portfolio_value = [initial_value]
+        pnl_series = []
+        
+        for i in range(1, len(data)):
+            current_row = data.iloc[i]
+            prev_row = data.iloc[i-1]
+            
+            # Simple PnL calculation based on position changes
+            if 'position' in data.columns and current_row['position'] != 0:
+                if prev_row['position'] == 0:  # New position
+                    entry_price = current_row['close']
+                    pnl = 0
+                else:  # Existing position
+                    price_change = (current_row['close'] - entry_price) / entry_price
+                    if current_row['position'] == 1:  # Long
+                        pnl = price_change
+                    else:  # Short
+                        pnl = -price_change
+                    
+                    if current_row['position'] == 0:  # Position closed
+                        pnl_series.append(pnl)
+            else:
+                pnl = 0
+            
+            new_value = portfolio_value[-1] * (1 + pnl * 0.01)  # Assuming 1% risk per trade
+            portfolio_value.append(new_value)
+        
+        # Convert to pandas Series for calculations
+        portfolio_series = pd.Series(portfolio_value)
+        pnl_series = pd.Series(pnl_series) if pnl_series else pd.Series([0])
+        
+        # Calculate metrics
+        total_return = (portfolio_series.iloc[-1] / portfolio_series.iloc[0]) - 1
+        win_rate = (pnl_series > 0).mean() if len(pnl_series) > 0 else 0
+        max_drawdown = calculate_max_drawdown(portfolio_series)
+        sharpe = calculate_sharpe_ratio(pnl_series.dropna())
+        
+        return {
+            "total_return_pct": round(total_return * 100, 2),
+            "win_rate": round(win_rate * 100, 2),
+            "max_drawdown_pct": round(max_drawdown * 100, 2),
+            "sharpe_ratio": round(sharpe, 2),
+            "num_trades": len(pnl_series)
+        }
+
+    def walk_forward_test(self, data, window_size_days=125, step_size_days=60):
+        """
+        Walk-forward test using rolling windows.
+
+        Args:
+            data: pd.DataFrame with price and indicators.
+            window_size_days: total length of each window (train + test), in trading days.
+            step_size_days: how much to move the window forward each iteration.
+
+        Returns:
+            pd.DataFrame summary of window-by-window performance metrics.
+        """
+        results = []
+        total_days = len(data)
+
+        bars_per_day = 7  # approximate for 1-hour bars (7 trading hours per day)
+
+        window_size = window_size_days * bars_per_day
+        step_size = step_size_days * bars_per_day
+
+        start = 0
+        end = start + window_size
+
+        print(f"Starting walk-forward test with {total_days} data points")
+        print(f"Window size: {window_size} bars ({window_size_days} days)")
+        print(f"Step size: {step_size} bars ({step_size_days} days)")
+
+        window_count = 0
+        while end < total_days:
+            window_count += 1
+            
+            in_sample_end = start + int(window_size * 0.6)  # ~60% in-sample
+            out_sample_start = in_sample_end
+            out_sample_end = end
+
+            # Out-of-sample slice
+            out_sample_data = data.iloc[out_sample_start:out_sample_end].copy()
+            
+            print(f"Window {window_count}: Testing on {len(out_sample_data)} bars")
+            
+            # Reset algorithm state for each window
+            self.position = 0
+            self.entry_price = 0
+            self.trades = []
+            
+            # Calculate indicators for this slice
+            out_sample_data = self.calculate_indicators(out_sample_data)
+            
+            # Run strategy on out-of-sample
+            strategy_results = self.execute_strategy(out_sample_data)
+            
+            # Evaluate metrics
+            try:
+                metrics = self.evaluate_performance(strategy_results)
+                metrics["window_start"] = data.index[out_sample_start]
+                metrics["window_end"] = data.index[out_sample_end - 1]
+                metrics["window_number"] = window_count
+                
+                results.append(metrics)
+                
+                print(f"  Return: {metrics['total_return_pct']:.2f}%, "
+                      f"Win Rate: {metrics['win_rate']:.1f}%, "
+                      f"Trades: {metrics['num_trades']}")
+                
+            except Exception as e:
+                print(f"  Error in window {window_count}: {e}")
+                # Add empty metrics to maintain sequence
+                metrics = {
+                    "total_return_pct": 0,
+                    "win_rate": 0,
+                    "max_drawdown_pct": 0,
+                    "sharpe_ratio": 0,
+                    "num_trades": 0,
+                    "window_start": data.index[out_sample_start],
+                    "window_end": data.index[out_sample_end - 1],
+                    "window_number": window_count
+                }
+                results.append(metrics)
+
+            # Move window forward
+            start += step_size
+            end = start + window_size
+
+        # Convert results to DataFrame
+        results_df = pd.DataFrame(results)
+        
+        if not results_df.empty:
+            print(f"\n=== Walk-Forward Test Summary ===")
+            print(f"Total Windows: {len(results_df)}")
+            print(f"Average Return: {results_df['total_return_pct'].mean():.2f}%")
+            print(f"Average Win Rate: {results_df['win_rate'].mean():.1f}%")
+            print(f"Average Sharpe: {results_df['sharpe_ratio'].mean():.2f}")
+            print(f"Positive Windows: {(results_df['total_return_pct'] > 0).sum()}/{len(results_df)}")
+        
+        return results_df
+

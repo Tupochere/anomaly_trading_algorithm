@@ -1,0 +1,41 @@
+
+🚀 WALK-FORWARD TESTING REPORT
+========================================
+Symbol: AAPL
+Test Period: 2020-01-04 13:00:00 to 2024-12-12 20:00:00
+Generated: 2025-07-01 09:33:47
+
+📊 PERFORMANCE METRICS
+========================================
+Total Windows Tested: 15
+Profitable Windows: 8/15 (53.3%)
+Average Return per Window: 0.15%
+Standard Deviation: 0.32%
+Best Window: 0.83%
+Worst Window: -0.26%
+Average Trades per Window: 1.0
+
+📈 COMPARISON WITH FULL-PERIOD BACKTEST
+========================================
+Full-Period Total Return: 1198.68%
+Walk-Forward Average: 0.15%
+Performance Gap: 1198.53%
+
+⚠️  RISK ASSESSMENT
+========================================
+- Large performance gap suggests potential overfitting
+- Low trade frequency (1 trade per window) indicates conservative strategy
+- Mixed results across time periods show market regime sensitivity
+
+🎯 RECOMMENDATIONS
+========================================
+1. Increase window size for more trades per period
+2. Optimize entry/exit thresholds
+3. Test across multiple market conditions
+4. Consider ensemble approach with multiple strategies
+5. Implement position sizing optimization
+
+📁 FILES GENERATED
+========================================
+Detailed Results: ../backtests/results/walk_forward/AAPL_walk_forward_20250701_093347.csv
+Summary Report: ../backtests/results/walk_forward/AAPL_walk_forward_summary_20250701_093347.txt
