@@ -1139,14 +1139,61 @@ class AdvancedTradingAlgorithmPropV2:
     def update_risk_limits(self, equity, daily_pnl, max_daily_loss=-5000, max_total_drawdown=-10000):
         """
         Prop firm risk management - daily loss and total drawdown limits
+        Enhanced with detailed debug logging for compliance monitoring
         """
+        # Calculate current metrics for logging
+        current_drawdown = equity - self.high_watermark
+        daily_loss_pct = (daily_pnl / equity) * 100 if equity > 0 else 0
+        total_drawdown_pct = (current_drawdown / self.high_watermark) * 100 if self.high_watermark > 0 else 0
+        
+        # Enhanced debug logging for risk monitoring
+        if self.debug:
+            self.log(f"Risk Limits Check:")
+            self.log(f"  Current Equity: ${equity:,.2f}")
+            self.log(f"  High Watermark: ${self.high_watermark:,.2f}")
+            self.log(f"  Daily P&L: ${daily_pnl:,.2f} ({daily_loss_pct:+.2f}%)")
+            self.log(f"  Current Drawdown: ${current_drawdown:,.2f} ({total_drawdown_pct:+.2f}%)")
+            self.log(f"  Daily Loss Limit: ${max_daily_loss:,.2f}")
+            self.log(f"  Total Drawdown Limit: ${max_total_drawdown:,.2f}")
+        
+        # Check daily loss limit
         if daily_pnl <= max_daily_loss:
-            self.log("Max daily loss hit. Blocking trades for today.")
+            violation_msg = (f"DAILY LOSS LIMIT BREACHED! "
+                           f"Daily P&L: ${daily_pnl:,.2f} ({daily_loss_pct:+.2f}%) "
+                           f"exceeds limit: ${max_daily_loss:,.2f}. "
+                           f"Current equity: ${equity:,.2f}. "
+                           f"Blocking trades for today.")
+            
+            if self.debug:
+                self.log(f"⚠️  {violation_msg}")
+            else:
+                self.log(violation_msg)
+            
             self.skip_today = True
+            return False
 
-        if equity - self.high_watermark < max_total_drawdown:
-            self.log("Max total drawdown exceeded. Stopping trading permanently.")
+        # Check total drawdown limit
+        if current_drawdown <= max_total_drawdown:
+            violation_msg = (f"TOTAL DRAWDOWN LIMIT BREACHED! "
+                           f"Current drawdown: ${current_drawdown:,.2f} ({total_drawdown_pct:+.2f}%) "
+                           f"exceeds limit: ${max_total_drawdown:,.2f}. "
+                           f"High watermark: ${self.high_watermark:,.2f}, "
+                           f"Current equity: ${equity:,.2f}. "
+                           f"Stopping trading permanently.")
+            
+            if self.debug:
+                self.log(f"❌ {violation_msg}")
+            else:
+                self.log(violation_msg)
+            
             self.stop_trading = True
+            return False
+        
+        # Log successful risk check in debug mode
+        if self.debug:
+            self.log(f"✅ Risk limits check passed - trading continues")
+            
+        return True
 
     def execute_strategy_with_intraday_confirmation(self, data_1h: pd.DataFrame, data_15m: pd.DataFrame = None) -> pd.DataFrame:
         """
