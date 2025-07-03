@@ -29,6 +29,23 @@ def calculate_sharpe_ratio(pnl_series, risk_free_rate=0.0):
     return (mean_return - risk_free_rate) / std_return * np.sqrt(252)
 
 class AdvancedTradingAlgorithmPropV2:
+    """
+    Advanced Trading Algorithm - Prop Firm Optimized Version 2
+    
+    Features:
+    - Higher trade frequency with tighter risk management
+    - Intraday confirmation using 15-minute timeframe data
+    - Dynamic position sizing based on signal strength and volatility
+    - Regime-adaptive signal generation
+    - Comprehensive risk management for prop firm compliance
+    
+    Intraday Confirmation:
+    - Uses 15-minute data to confirm hourly signals
+    - Long confirmation: RSI > 45 and EMA_12 > EMA_26
+    - Short confirmation: RSI < 55 and EMA_12 < EMA_26
+    - Helps reduce false signals and improve trade quality
+    """
+    
     def __init__(self, lookback_period=252, debug=False, max_stop_pct=0.03):
         self.lookback_period = lookback_period
         self.debug = debug
@@ -249,8 +266,8 @@ class AdvancedTradingAlgorithmPropV2:
 
         return stop_loss, take_profit
 
-    def execute_strategy(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Main strategy execution"""
+    def execute_strategy(self, data: pd.DataFrame, data_15m: pd.DataFrame = None) -> pd.DataFrame:
+        """Main strategy execution with optional 15-minute data for intraday confirmation"""
         results = []
         entry_index = None  # Track when we entered positions
         price_history = []  # Track price history for trailing stops
@@ -298,29 +315,74 @@ class AdvancedTradingAlgorithmPropV2:
 
             # 4. Position entry logic
             if self.position == 0 and combined_signal != 0:
-                # Enter position
-                self.position = 1 if combined_signal > 0 else -1
-                self.entry_price = current['close']
+                # Check for intraday confirmation if 15-minute data is available
+                intraday_confirmed = True  # Default to True if no 15m data
                 
-                # Calculate normalized volatility for position sizing
-                current_atr = current['ATR']
-                current_price = current['close']
-                normalized_volatility = current_atr / current_price
+                if data_15m is not None:
+                    # Map current hourly timestamp to 15-minute data
+                    current_timestamp = current.name if hasattr(current, 'name') else data.index[i]
+                    
+                    # Find closest 15-minute timestamp
+                    try:
+                        # Use the exact timestamp or the closest available one
+                        if current_timestamp in data_15m.index:
+                            idx_15m = current_timestamp
+                        else:
+                            # Find the most recent 15-minute bar before current time
+                            available_times = data_15m.index[data_15m.index <= current_timestamp]
+                            if len(available_times) > 0:
+                                idx_15m = available_times[-1]
+                            else:
+                                idx_15m = None
+                        
+                        if idx_15m is not None:
+                            signal_direction = 1 if combined_signal > 0 else -1
+                            intraday_confirmed = self.get_intraday_confirmation(data_15m, idx_15m, signal_direction)
+                            
+                            if self.debug and not intraday_confirmed:
+                                self.log(f"Intraday confirmation failed for {signal_direction} signal at {current_timestamp}")
+                        else:
+                            intraday_confirmed = False
+                            if self.debug:
+                                self.log(f"No matching 15m data found for timestamp {current_timestamp}")
+                                
+                    except Exception as e:
+                        if self.debug:
+                            self.log(f"Error in intraday confirmation: {e}")
+                        intraday_confirmed = False
                 
-                # Use enhanced volatility-aware position sizing
-                position_size = self.calculate_position_size(signal_strength_score, normalized_volatility, threshold=0.3)
-                
-                action = "BUY" if self.position == 1 else "SELL"
-                entry_index = i  # Track when we entered
-                price_history = [current['close']]  # Initialize price history
-                
-                # Debug logging for entries
-                if self.debug:
-                    self.log(f"\n=== ENTER {action} at {current['close']:.2f} (Bar {i}) ===")
-                    self.log(f"Primary Signal: {primary_reason}")
-                    self.log(f"Secondary Signal: {secondary_reason}")
-                    self.log(f"Final Score: {signal_strength_score:.2f} | Volatility: {normalized_volatility:.3f} | Position Size: {position_size:.4f}")
-                    self.log(f"Using improved dynamic exit logic")
+                # Only enter position if confirmed (or no 15m data available)
+                if intraday_confirmed:
+                    # Enter position
+                    self.position = 1 if combined_signal > 0 else -1
+                    self.entry_price = current['close']
+                    
+                    # Calculate normalized volatility for position sizing
+                    current_atr = current['ATR']
+                    current_price = current['close']
+                    normalized_volatility = current_atr / current_price
+                    
+                    # Use enhanced volatility-aware position sizing
+                    position_size = self.calculate_position_size(signal_strength_score, normalized_volatility, threshold=0.3)
+                    
+                    action = "BUY" if self.position == 1 else "SELL"
+                    entry_index = i  # Track when we entered
+                    price_history = [current['close']]  # Initialize price history
+                    
+                    # Debug logging for entries
+                    if self.debug:
+                        confirmation_status = "with 15m confirmation" if data_15m is not None else "no 15m data"
+                        self.log(f"\n=== ENTER {action} at {current['close']:.2f} (Bar {i}) {confirmation_status} ===")
+                        self.log(f"Primary Signal: {primary_reason}")
+                        self.log(f"Secondary Signal: {secondary_reason}")
+                        self.log(f"Final Score: {signal_strength_score:.2f} | Volatility: {normalized_volatility:.3f} | Position Size: {position_size:.4f}")
+                        self.log(f"Using improved dynamic exit logic")
+                else:
+                    # Signal not confirmed by intraday analysis
+                    action = "WAIT_CONFIRMATION"
+                    if self.debug:
+                        self.log(f"Signal rejected due to lack of intraday confirmation")
+            
             
             # 5. Position management
             elif self.position != 0:
@@ -783,21 +845,59 @@ class AdvancedTradingAlgorithmPropV2:
         
         return results_df
     
-    def get_intraday_confirmation(self, data_15m, idx_15m):
+    def get_intraday_confirmation(self, data_15m, idx_15m, signal_direction):
         """
-        Intraday confirmation logic for prop firm trading
+        Intraday confirmation logic for prop firm trading using 15-minute data.
+        
+        Args:
+            data_15m: 15-minute timeframe data with calculated indicators
+            idx_15m: index position in the 15-minute data
+            signal_direction: 1 for long, -1 for short
+            
+        Returns:
+            bool: True if signal is confirmed, False otherwise
         """
         try:
-            rsi = data_15m.loc[idx_15m, "RSI"]
-            ema12 = data_15m.loc[idx_15m, "EMA_12"]
-            ema26 = data_15m.loc[idx_15m, "EMA_26"]
-
-            if rsi > 45 and ema12 > ema26:
-                return True
-        except KeyError:
-            pass
-
-        return False
+            # Handle different index types (integer vs timestamp)
+            if isinstance(idx_15m, int):
+                if idx_15m >= len(data_15m):
+                    return False
+                current_row = data_15m.iloc[idx_15m]
+            else:
+                # If idx_15m is a timestamp, use .loc
+                if idx_15m not in data_15m.index:
+                    return False
+                current_row = data_15m.loc[idx_15m]
+            
+            # Extract indicators with fallback values
+            rsi = current_row.get("RSI", 50)
+            ema12 = current_row.get("EMA_12", 0)
+            ema26 = current_row.get("EMA_26", 0)
+            
+            # Validate that we have meaningful indicator values
+            if rsi == 0 or ema12 == 0 or ema26 == 0:
+                return False
+            
+            # Long confirmation: RSI > 45 and EMA_12 > EMA_26
+            if signal_direction == 1:
+                if rsi > 45 and ema12 > ema26:
+                    if self.debug:
+                        self.log(f"Long confirmation: RSI={rsi:.1f}, EMA12={ema12:.4f}, EMA26={ema26:.4f}")
+                    return True
+            
+            # Short confirmation: RSI < 55 and EMA_12 < EMA_26
+            elif signal_direction == -1:
+                if rsi < 55 and ema12 < ema26:
+                    if self.debug:
+                        self.log(f"Short confirmation: RSI={rsi:.1f}, EMA12={ema12:.4f}, EMA26={ema26:.4f}")
+                    return True
+            
+            return False
+            
+        except (KeyError, IndexError, TypeError) as e:
+            if self.debug:
+                self.log(f"Intraday confirmation error: {e}")
+            return False
 
     def should_exit_end_of_day(self, current_time):
         """
@@ -818,4 +918,27 @@ class AdvancedTradingAlgorithmPropV2:
         if equity - self.high_watermark < max_total_drawdown:
             self.log("Max total drawdown exceeded. Stopping trading permanently.")
             self.stop_trading = True
+
+    def execute_strategy_with_intraday_confirmation(self, data_1h: pd.DataFrame, data_15m: pd.DataFrame) -> pd.DataFrame:
+        """
+        Execute strategy with intraday confirmation using 15-minute data.
+        
+        Args:
+            data_1h: Hourly timeframe data (main signals)
+            data_15m: 15-minute timeframe data (confirmation)
+            
+        Returns:
+            pd.DataFrame: Strategy execution results
+        """
+        if self.debug:
+            self.log("Executing strategy with 15-minute intraday confirmation")
+            self.log(f"Hourly data points: {len(data_1h)}")
+            self.log(f"15-minute data points: {len(data_15m)}")
+        
+        # Ensure both datasets have required indicators
+        data_1h_with_indicators = self.calculate_indicators(data_1h)
+        data_15m_with_indicators = self.calculate_indicators(data_15m)
+        
+        # Execute strategy with intraday confirmation
+        return self.execute_strategy(data_1h_with_indicators, data_15m_with_indicators)
 
