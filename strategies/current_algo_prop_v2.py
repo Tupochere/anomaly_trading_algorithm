@@ -46,10 +46,11 @@ class AdvancedTradingAlgorithmPropV2:
     - Helps reduce false signals and improve trade quality
     """
     
-    def __init__(self, lookback_period=252, debug=False, max_stop_pct=0.03):
+    def __init__(self, lookback_period=252, debug=False, max_stop_pct=0.03, account_phase="evaluation"):
         self.lookback_period = lookback_period
         self.debug = debug
         self.max_stop_pct = max_stop_pct
+        self.account_phase = account_phase  # "evaluation" or "funded"
         self.daily_pnl = 0.0
         self.total_drawdown = 0.0
         self.high_watermark = 100_000  # Adjust to your initial balance
@@ -229,23 +230,49 @@ class AdvancedTradingAlgorithmPropV2:
         
         return {"signal": signal, "strength": strength, "reason": reason}
     
-    def calculate_position_size(self, final_score, volatility, threshold=0.3, base_size=0.04, max_size=0.08, min_size=0.02):
+    def calculate_position_size(self, final_score, volatility, account_phase="evaluation", threshold=0.3, base_size=0.04, max_size=0.08, min_size=0.02):
         """
         Calculate position size based on signal strength and volatility - prop firm optimized.
-        - final_score: final signal score (0 to 1)
-        - volatility: normalized ATR as fraction of price (e.g., 0.02 means 2%)
+        
+        Args:
+            final_score: final signal score (0 to 1)
+            volatility: normalized ATR as fraction of price (e.g., 0.02 means 2%)
+            account_phase: "evaluation" or "funded" - determines maximum position size cap
+            threshold: minimum signal strength threshold
+            base_size: base position size
+            max_size: maximum position size (before account phase capping)
+            min_size: minimum position size
+            
+        Returns:
+            Position size as percentage of account (0.01 = 1%)
         """
         if final_score <= threshold:
             return min_size
 
+        # Calculate raw position size based on signal strength
         raw_size = base_size + ((final_score - threshold) / (1 - threshold)) * (max_size - base_size)
 
+        # Adjust for volatility
         if volatility > 0.03:
-            raw_size *= 0.7
+            raw_size *= 0.7  # Reduce size for high volatility
         elif volatility < 0.015:
-            raw_size *= 1.2
+            raw_size *= 1.2  # Increase size for low volatility
 
-        return max(min_size, min(raw_size, max_size))
+        # Apply account phase caps (prop firm risk management)
+        if account_phase == "evaluation":
+            # Conservative cap for evaluation phase
+            phase_max_size = 0.03  # 3% maximum
+        elif account_phase == "funded":
+            # Slightly more aggressive for funded accounts
+            phase_max_size = 0.05  # 5% maximum
+        else:
+            # Default to evaluation phase for safety
+            phase_max_size = 0.03
+
+        # Apply all constraints
+        final_size = max(min_size, min(raw_size, max_size, phase_max_size))
+        
+        return final_size
     
     def calculate_stops(self, data: pd.DataFrame, idx: int, signal: int, entry_price: float) -> Tuple[float, float]:
         """Dynamic stop loss and take profit calculation with a max stop-loss cap"""
@@ -362,8 +389,13 @@ class AdvancedTradingAlgorithmPropV2:
                     current_price = current['close']
                     normalized_volatility = current_atr / current_price
                     
-                    # Use enhanced volatility-aware position sizing
-                    position_size = self.calculate_position_size(signal_strength_score, normalized_volatility, threshold=0.3)
+                    # Use enhanced volatility-aware position sizing with account phase
+                    position_size = self.calculate_position_size(
+                        signal_strength_score, 
+                        normalized_volatility, 
+                        account_phase=self.account_phase,
+                        threshold=0.3
+                    )
                     
                     action = "BUY" if self.position == 1 else "SELL"
                     entry_index = i  # Track when we entered
