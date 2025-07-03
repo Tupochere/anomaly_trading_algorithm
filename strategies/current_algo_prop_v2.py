@@ -792,17 +792,20 @@ class AdvancedTradingAlgorithmPropV2:
             "num_trades": len(pnl_series)
         }
 
-    def walk_forward_test(self, data, window_size_days=125, step_size_days=60):
+    def walk_forward_test(self, data, window_size_days=125, step_size_days=60, 
+                         compliance_firm="FTMO", initial_balance=100000):
         """
-        Walk-forward test using rolling windows.
+        Enhanced walk-forward test using rolling windows with prop firm compliance validation.
 
         Args:
             data: pd.DataFrame with price and indicators.
             window_size_days: total length of each window (train + test), in trading days.
             step_size_days: how much to move the window forward each iteration.
+            compliance_firm: "FTMO" or "FXIFY" for compliance testing.
+            initial_balance: Starting balance for compliance calculations.
 
         Returns:
-            pd.DataFrame summary of window-by-window performance metrics.
+            pd.DataFrame summary of window-by-window performance metrics with compliance results.
         """
         results = []
         total_days = len(data)
@@ -815,11 +818,15 @@ class AdvancedTradingAlgorithmPropV2:
         start = 0
         end = start + window_size
 
-        print(f"Starting walk-forward test with {total_days} data points")
+        print(f"Starting enhanced walk-forward test with {total_days} data points")
         print(f"Window size: {window_size} bars ({window_size_days} days)")
         print(f"Step size: {step_size} bars ({step_size_days} days)")
+        print(f"Compliance testing: {compliance_firm} rules")
+        print("=" * 60)
 
         window_count = 0
+        compliance_passed_count = 0
+        
         while end < total_days:
             window_count += 1
             
@@ -830,7 +837,8 @@ class AdvancedTradingAlgorithmPropV2:
             # Out-of-sample slice
             out_sample_data = data.iloc[out_sample_start:out_sample_end].copy()
             
-            print(f"Window {window_count}: Testing on {len(out_sample_data)} bars")
+            print(f"\nWindow {window_count}: Testing on {len(out_sample_data)} bars")
+            print(f"  Period: {data.index[out_sample_start]} to {data.index[out_sample_end - 1]}")
             
             # Reset algorithm state for each window
             self.position = 0
@@ -850,14 +858,104 @@ class AdvancedTradingAlgorithmPropV2:
                 metrics["window_end"] = data.index[out_sample_end - 1]
                 metrics["window_number"] = window_count
                 
-                results.append(metrics)
+                # ===== PROP FIRM COMPLIANCE VALIDATION =====
+                # Calculate P&L and equity progression for compliance testing
+                window_pnl = 0.0
+                min_daily_pnl = 0.0
+                max_drawdown_experienced = 0.0
+                equity_curve = [initial_balance]
+                high_watermark = initial_balance
                 
+                # Calculate daily P&L and equity progression from trades
+                if self.trades:
+                    trades_df = pd.DataFrame(self.trades)
+                    
+                    # Calculate cumulative P&L
+                    for _, trade in trades_df.iterrows():
+                        trade_pnl = trade['pnl_pct'] * initial_balance * 0.01  # Assuming 1% risk per trade
+                        window_pnl += trade_pnl
+                        current_equity = equity_curve[-1] + trade_pnl
+                        equity_curve.append(current_equity)
+                        
+                        # Track worst daily P&L (simplified: worst single trade)
+                        if trade_pnl < min_daily_pnl:
+                            min_daily_pnl = trade_pnl
+                        
+                        # Update high watermark and calculate drawdown
+                        if current_equity > high_watermark:
+                            high_watermark = current_equity
+                        
+                        drawdown = current_equity - high_watermark
+                        if drawdown < max_drawdown_experienced:
+                            max_drawdown_experienced = drawdown
+                
+                # Run compliance checks
+                compliance_passed = True
+                compliance_notes = []
+                
+                # Initialize compliance checker based on firm
+                if compliance_firm.upper() == "FTMO":
+                    compliance = FTMOCompliance(initial_balance=initial_balance, debug=False)
+                elif compliance_firm.upper() == "FXIFY":
+                    compliance = FXIFYCompliance(initial_balance=initial_balance, debug=False)
+                else:
+                    compliance = FTMOCompliance(initial_balance=initial_balance, debug=False)  # Default to FTMO
+                
+                # Check daily loss limits
+                daily_compliant, daily_reason = compliance.check_daily_limits(min_daily_pnl)
+                if not daily_compliant:
+                    compliance_passed = False
+                    compliance_notes.append(f"Daily loss: {daily_reason}")
+                
+                # Check total drawdown limits
+                max_drawdown_limit = compliance.max_loss_limit if hasattr(compliance, 'max_loss_limit') else compliance.max_drawdown_limit
+                drawdown_compliant, drawdown_reason = compliance.check_total_drawdown(
+                    equity_curve[-1] if equity_curve else initial_balance, 
+                    high_watermark, 
+                    max_drawdown_limit
+                )
+                if not drawdown_compliant:
+                    compliance_passed = False
+                    compliance_notes.append(f"Total drawdown: {drawdown_reason}")
+                
+                # Check position sizing compliance (simplified check)
+                if self.trades:
+                    max_position_size = 0.0
+                    for _, trade in trades_df.iterrows():
+                        # Estimate position size from P&L (this is approximate)
+                        estimated_size = abs(trade['pnl_pct']) / 2.0  # Rough estimate
+                        if estimated_size > max_position_size:
+                            max_position_size = estimated_size
+                    
+                    if max_position_size > (0.03 if self.account_phase == "evaluation" else 0.05):
+                        compliance_passed = False
+                        compliance_notes.append(f"Position size exceeded: {max_position_size:.2%} > {0.03 if self.account_phase == 'evaluation' else 0.05:.0%}")
+                
+                # Add compliance results to metrics
+                metrics["compliance_passed"] = compliance_passed
+                metrics["compliance_notes"] = "; ".join(compliance_notes) if compliance_notes else "All checks passed"
+                metrics["compliance_firm"] = compliance_firm
+                metrics["worst_daily_pnl"] = min_daily_pnl
+                metrics["max_drawdown_amount"] = max_drawdown_experienced
+                metrics["final_equity"] = equity_curve[-1] if equity_curve else initial_balance
+                
+                if compliance_passed:
+                    compliance_passed_count += 1
+                
+                # Print window results with compliance status
+                compliance_status = "✅ PASS" if compliance_passed else "❌ FAIL"
                 print(f"  Return: {metrics['total_return_pct']:.2f}%, "
                       f"Win Rate: {metrics['win_rate']:.1f}%, "
-                      f"Trades: {metrics['num_trades']}")
+                      f"Trades: {metrics['num_trades']}, "
+                      f"Compliance: {compliance_status}")
+                
+                if not compliance_passed:
+                    print(f"  Violations: {metrics['compliance_notes']}")
+                
+                results.append(metrics)
                 
             except Exception as e:
-                print(f"  Error in window {window_count}: {e}")
+                print(f"  ❌ Error in window {window_count}: {e}")
                 # Add empty metrics to maintain sequence
                 metrics = {
                     "total_return_pct": 0,
@@ -867,7 +965,13 @@ class AdvancedTradingAlgorithmPropV2:
                     "num_trades": 0,
                     "window_start": data.index[out_sample_start],
                     "window_end": data.index[out_sample_end - 1],
-                    "window_number": window_count
+                    "window_number": window_count,
+                    "compliance_passed": False,
+                    "compliance_notes": f"Error during testing: {str(e)}",
+                    "compliance_firm": compliance_firm,
+                    "worst_daily_pnl": 0,
+                    "max_drawdown_amount": 0,
+                    "final_equity": initial_balance
                 }
                 results.append(metrics)
 
@@ -879,12 +983,49 @@ class AdvancedTradingAlgorithmPropV2:
         results_df = pd.DataFrame(results)
         
         if not results_df.empty:
-            print(f"\n=== Walk-Forward Test Summary ===")
-            print(f"Total Windows: {len(results_df)}")
+            print(f"\n{'='*60}")
+            print(f"🎯 ENHANCED WALK-FORWARD TEST SUMMARY")
+            print(f"{'='*60}")
+            print(f"Total Windows Tested: {len(results_df)}")
+            print(f"Compliance Firm: {compliance_firm}")
+            print(f"Account Phase: {self.account_phase}")
+            print(f"Initial Balance: ${initial_balance:,.2f}")
+            print()
+            print(f"📊 PERFORMANCE METRICS:")
             print(f"Average Return: {results_df['total_return_pct'].mean():.2f}%")
             print(f"Average Win Rate: {results_df['win_rate'].mean():.1f}%")
             print(f"Average Sharpe: {results_df['sharpe_ratio'].mean():.2f}")
-            print(f"Positive Windows: {(results_df['total_return_pct'] > 0).sum()}/{len(results_df)}")
+            print(f"Positive Windows: {(results_df['total_return_pct'] > 0).sum()}/{len(results_df)} ({(results_df['total_return_pct'] > 0).mean()*100:.1f}%)")
+            print()
+            print(f"🏛️ COMPLIANCE RESULTS:")
+            print(f"Compliant Windows: {compliance_passed_count}/{len(results_df)} ({compliance_passed_count/len(results_df)*100:.1f}%)")
+            print(f"Failed Windows: {len(results_df) - compliance_passed_count}/{len(results_df)} ({(len(results_df) - compliance_passed_count)/len(results_df)*100:.1f}%)")
+            
+            # Show compliance failure reasons
+            failed_windows = results_df[~results_df['compliance_passed']]
+            if not failed_windows.empty:
+                print(f"\n❌ COMPLIANCE FAILURE ANALYSIS:")
+                failure_reasons = {}
+                for _, row in failed_windows.iterrows():
+                    notes = row['compliance_notes']
+                    if notes in failure_reasons:
+                        failure_reasons[notes] += 1
+                    else:
+                        failure_reasons[notes] = 1
+                
+                for reason, count in failure_reasons.items():
+                    print(f"  - {reason}: {count} window(s)")
+            
+            print(f"\n✅ DEPLOYMENT READINESS:")
+            readiness_score = compliance_passed_count / len(results_df) * 100
+            if readiness_score >= 80:
+                print(f"🟢 EXCELLENT ({readiness_score:.1f}%): Ready for prop firm deployment")
+            elif readiness_score >= 60:
+                print(f"🟡 GOOD ({readiness_score:.1f}%): Suitable with risk monitoring")
+            elif readiness_score >= 40:
+                print(f"🟠 FAIR ({readiness_score:.1f}%): Requires optimization before deployment")
+            else:
+                print(f"🔴 POOR ({readiness_score:.1f}%): Major issues, not suitable for prop firm trading")
         
         return results_df
     
