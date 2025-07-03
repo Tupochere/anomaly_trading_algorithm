@@ -406,32 +406,43 @@ class AdvancedTradingAlgorithmPropV2:
                 # Determine position direction
                 direction = "long" if self.position == 1 else "short"
                 
-                # Check improved dynamic exit conditions
-                exit_now, exit_reason = self.should_exit(
-                    self.position, 
-                    current['close'], 
-                    indicators, 
-                    self.entry_price, 
-                    current['ATR'], 
-                    direction,
-                    bars_held,
-                    price_history
-                )
-                
-                # Additional exit conditions
-                exit_condition = None
-                
-                if exit_now:
-                    action = "EXIT_DYNAMIC"
+                # ✅ PRIORITY 1: Check for end-of-day exit first (prop firm compliance)
+                current_timestamp = current.name if hasattr(current, 'name') else data.index[i]
+                if self.should_exit_end_of_day(current_timestamp):
+                    action = "EXIT_END_OF_DAY"
                     exit_price = current['close']
-                    exit_condition = exit_reason
+                    exit_condition = "End-of-day exit (prop firm compliance)"
+                    
+                    if self.debug:
+                        self.log(f"Forced end-of-day exit at {current_timestamp}")
                 
-                # Signal-based exit (override dynamic if stronger signal)
-                elif (self.position == 1 and combined_signal < -0.5) or \
-                    (self.position == -1 and combined_signal > 0.5):
-                    action = "EXIT_SIGNAL"
-                    exit_price = current['close']
-                    exit_condition = "Strong signal reversal"
+                # ✅ PRIORITY 2: Check improved dynamic exit conditions
+                else:
+                    exit_now, exit_reason = self.should_exit(
+                        self.position, 
+                        current['close'], 
+                        indicators, 
+                        self.entry_price, 
+                        current['ATR'], 
+                        direction,
+                        bars_held,
+                        price_history
+                    )
+                    
+                    # Additional exit conditions
+                    exit_condition = None
+                    
+                    if exit_now:
+                        action = "EXIT_DYNAMIC"
+                        exit_price = current['close']
+                        exit_condition = exit_reason
+                    
+                    # Signal-based exit (override dynamic if stronger signal)
+                    elif (self.position == 1 and combined_signal < -0.5) or \
+                        (self.position == -1 and combined_signal > 0.5):
+                        action = "EXIT_SIGNAL"
+                        exit_price = current['close']
+                        exit_condition = "Strong signal reversal"
                 
                 # Handle exits
                 if exit_condition:
@@ -901,11 +912,56 @@ class AdvancedTradingAlgorithmPropV2:
 
     def should_exit_end_of_day(self, current_time):
         """
-        Check if we should exit positions at end of day
+        Check if we should exit positions at end of day for prop firm compliance.
+        Exits positions 30 minutes before market close to avoid overnight risk.
+        
+        Args:
+            current_time: pandas Timestamp or datetime object
+            
+        Returns:
+            bool: True if should exit, False otherwise
         """
-        if current_time.hour >= 21:
-            return True
-        return False
+        try:
+            # Handle different time formats
+            if hasattr(current_time, 'hour'):
+                current_hour = current_time.hour
+                current_minute = current_time.minute
+            else:
+                # If it's a string or other format, try to parse
+                if isinstance(current_time, str):
+                    current_time = pd.to_datetime(current_time)
+                    current_hour = current_time.hour
+                    current_minute = current_time.minute
+                else:
+                    return False
+            
+            # Market typically closes at 21:00 UTC (9 PM)
+            # Exit 30 minutes before: 20:30 UTC (8:30 PM)
+            market_close_hour = 21
+            market_close_minute = 0
+            exit_buffer_minutes = 30
+            
+            # Calculate exit time (30 minutes before market close)
+            exit_hour = market_close_hour
+            exit_minute = market_close_minute - exit_buffer_minutes
+            
+            # Handle minute underflow
+            if exit_minute < 0:
+                exit_minute += 60
+                exit_hour -= 1
+            
+            # Check if current time is at or after the exit time
+            if current_hour > exit_hour or (current_hour == exit_hour and current_minute >= exit_minute):
+                if self.debug:
+                    self.log(f"End-of-day exit triggered at {current_hour:02d}:{current_minute:02d}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            if self.debug:
+                self.log(f"Error in should_exit_end_of_day: {e}")
+            return False
 
     def update_risk_limits(self, equity, daily_pnl, max_daily_loss=-5000, max_total_drawdown=-10000):
         """
@@ -919,7 +975,7 @@ class AdvancedTradingAlgorithmPropV2:
             self.log("Max total drawdown exceeded. Stopping trading permanently.")
             self.stop_trading = True
 
-    def execute_strategy_with_intraday_confirmation(self, data_1h: pd.DataFrame, data_15m: pd.DataFrame) -> pd.DataFrame:
+    def execute_strategy_with_intraday_confirmation(self, data_1h: pd.DataFrame, data_15m: pd.DataFrame = None) -> pd.DataFrame:
         """
         Execute strategy with intraday confirmation using 15-minute data.
         
@@ -933,11 +989,14 @@ class AdvancedTradingAlgorithmPropV2:
         if self.debug:
             self.log("Executing strategy with 15-minute intraday confirmation")
             self.log(f"Hourly data points: {len(data_1h)}")
-            self.log(f"15-minute data points: {len(data_15m)}")
+            if data_15m is not None:
+                self.log(f"15-minute data points: {len(data_15m)}")
+            else:
+                self.log("15-minute data: None (using hourly signals only)")
         
         # Ensure both datasets have required indicators
         data_1h_with_indicators = self.calculate_indicators(data_1h)
-        data_15m_with_indicators = self.calculate_indicators(data_15m)
+        data_15m_with_indicators = self.calculate_indicators(data_15m) if data_15m is not None else None
         
         # Execute strategy with intraday confirmation
         return self.execute_strategy(data_1h_with_indicators, data_15m_with_indicators)
