@@ -1001,3 +1001,388 @@ class AdvancedTradingAlgorithmPropV2:
         # Execute strategy with intraday confirmation
         return self.execute_strategy(data_1h_with_indicators, data_15m_with_indicators)
 
+# =============================================================================
+# PROP FIRM COMPLIANCE CLASSES
+# =============================================================================
+
+class BasePropFirmCompliance:
+    """Base class for prop firm compliance rules"""
+    
+    def __init__(self, debug=False):
+        self.debug = debug
+        self.firm_name = "Unknown"
+        self.daily_loss_limit = 0.0
+        self.max_loss_limit = 0.0
+        self.restricted_strategies = []
+        self.compliance_violations = []
+    
+    def log(self, msg):
+        if self.debug:
+            print(f"[{self.firm_name}] {msg}")
+    
+    def validate_trade(self, trade_params):
+        """
+        Validate if a trade is compliant with firm rules.
+        
+        Args:
+            trade_params: Dict containing trade parameters
+            
+        Returns:
+            tuple: (is_compliant: bool, violations: list)
+        """
+        raise NotImplementedError("Subclasses must implement validate_trade")
+    
+    def check_daily_limits(self, daily_pnl):
+        """
+        Check if daily PnL is within limits.
+        
+        Args:
+            daily_pnl: Current daily profit/loss
+            
+        Returns:
+            tuple: (is_compliant: bool, reason: str)
+        """
+        if daily_pnl <= self.daily_loss_limit:
+            reason = f"Daily loss limit exceeded: {daily_pnl:.2f} <= {self.daily_loss_limit:.2f}"
+            self.log(reason)
+            return False, reason
+        return True, "Daily limits OK"
+    
+    def check_total_drawdown(self, equity, high_watermark, max_drawdown):
+        """
+        Check if total drawdown is within limits.
+        
+        Args:
+            equity: Current equity
+            high_watermark: Peak equity value
+            max_drawdown: Maximum allowed drawdown (negative value)
+            
+        Returns:
+            tuple: (is_compliant: bool, reason: str)
+        """
+        current_drawdown = equity - high_watermark
+        if current_drawdown < max_drawdown:
+            reason = f"Max drawdown exceeded: {current_drawdown:.2f} < {max_drawdown:.2f}"
+            self.log(reason)
+            return False, reason
+        return True, "Drawdown limits OK"
+
+
+class FTMOCompliance(BasePropFirmCompliance):
+    """
+    FTMO prop firm compliance rules based on EA documentation.
+    
+    Key Rules:
+    - Daily loss limit: 5% of initial balance
+    - Max loss limit: 10% of initial balance
+    - Prohibited: HFT, Arbitrage, Martingale, Grid Trading
+    - Allowed: Standard trading EAs, scalping (non-HFT), custom strategies
+    """
+    
+    def __init__(self, initial_balance=100000, debug=False):
+        super().__init__(debug)
+        self.firm_name = "FTMO"
+        self.initial_balance = initial_balance
+        
+        # FTMO specific limits (as percentages, converted to absolute values)
+        self.daily_loss_limit = -initial_balance * 0.05  # -5% daily loss
+        self.max_loss_limit = -initial_balance * 0.10     # -10% max loss
+        
+        # Prohibited strategies
+        self.restricted_strategies = [
+            "high_frequency_trading",
+            "arbitrage",
+            "latency_arbitrage", 
+            "martingale",
+            "grid_trading"
+        ]
+        
+        # Position sizing limits
+        self.max_position_size = 0.02  # 2% risk per trade (conservative)
+        self.max_leverage = 100  # 1:100 leverage
+        
+        if self.debug:
+            self.log(f"Initialized with balance: ${initial_balance:,.2f}")
+            self.log(f"Daily loss limit: ${self.daily_loss_limit:,.2f}")
+            self.log(f"Max loss limit: ${self.max_loss_limit:,.2f}")
+    
+    def validate_trade(self, trade_params):
+        """
+        Validate trade against FTMO rules.
+        
+        Args:
+            trade_params: Dict with keys:
+                - strategy_type: str
+                - position_size: float (as percentage)
+                - leverage: float
+                - trade_frequency: int (trades per hour)
+                - risk_per_trade: float (as percentage)
+                
+        Returns:
+            tuple: (is_compliant: bool, violations: list)
+        """
+        violations = []
+        
+        # Check strategy type
+        strategy_type = trade_params.get("strategy_type", "").lower()
+        if strategy_type in self.restricted_strategies:
+            violations.append(f"Strategy '{strategy_type}' is prohibited by FTMO")
+        
+        # Check position size
+        position_size = trade_params.get("position_size", 0)
+        if position_size > self.max_position_size:
+            violations.append(f"Position size {position_size:.2%} exceeds max {self.max_position_size:.2%}")
+        
+        # Check leverage
+        leverage = trade_params.get("leverage", 1)
+        if leverage > self.max_leverage:
+            violations.append(f"Leverage {leverage}:1 exceeds max {self.max_leverage}:1")
+        
+        # Check for high frequency trading
+        trade_frequency = trade_params.get("trade_frequency", 0)
+        if trade_frequency > 10:  # More than 10 trades per hour = HFT
+            violations.append(f"Trade frequency {trade_frequency}/hour suggests HFT (prohibited)")
+        
+        # Check risk per trade
+        risk_per_trade = trade_params.get("risk_per_trade", 0)
+        if risk_per_trade > 0.02:  # 2% max risk per trade
+            violations.append(f"Risk per trade {risk_per_trade:.2%} exceeds recommended 2%")
+        
+        is_compliant = len(violations) == 0
+        
+        if not is_compliant:
+            self.log(f"Trade validation failed: {violations}")
+        
+        return is_compliant, violations
+    
+    def check_profit_target(self, current_profit, phase="challenge"):
+        """
+        Check if profit target is met for specific phase.
+        
+        Args:
+            current_profit: Current profit amount
+            phase: "challenge" or "verification"
+            
+        Returns:
+            tuple: (target_met: bool, required_profit: float, reason: str)
+        """
+        if phase == "challenge":
+            target = self.initial_balance * 0.10  # 10% profit target
+        elif phase == "verification":
+            target = self.initial_balance * 0.05  # 5% profit target
+        else:
+            target = 0  # No target for funded account
+        
+        target_met = current_profit >= target
+        reason = f"Profit target: {current_profit:.2f} / {target:.2f} ({phase})"
+        
+        return target_met, target, reason
+
+
+class FXIFYCompliance(BasePropFirmCompliance):
+    """
+    FXIFY prop firm compliance rules based on EA documentation.
+    
+    Key Rules:
+    - Daily loss limit: 2% (Starter) / 3% (Expert) 
+    - Max drawdown: 4% (Starter) / 4-5% (Expert)
+    - Consistency rule: 30% (Starter) / 40% (Expert)
+    - Prohibited: Latency arbitrage, HFT, group hedging, reverse hedging
+    - Note: EAs forbidden in Instant Funding accounts
+    """
+    
+    def __init__(self, initial_balance=100000, account_type="starter", debug=False):
+        super().__init__(debug)
+        self.firm_name = "FXIFY"
+        self.initial_balance = initial_balance
+        self.account_type = account_type.lower()
+        
+        # FXIFY specific limits based on account type
+        if self.account_type == "starter":
+            self.daily_loss_limit = -initial_balance * 0.02  # -2% daily loss
+            self.max_drawdown_limit = -initial_balance * 0.04  # -4% max drawdown
+            self.consistency_limit = 0.30  # 30% consistency rule
+        elif self.account_type == "expert":
+            self.daily_loss_limit = -initial_balance * 0.03  # -3% daily loss
+            self.max_drawdown_limit = -initial_balance * 0.05  # -5% max drawdown
+            self.consistency_limit = 0.40  # 40% consistency rule
+        else:
+            # Default to starter limits
+            self.daily_loss_limit = -initial_balance * 0.02
+            self.max_drawdown_limit = -initial_balance * 0.04
+            self.consistency_limit = 0.30
+        
+        # Prohibited strategies
+        self.restricted_strategies = [
+            "latency_arbitrage",
+            "high_frequency_trading",
+            "group_hedging",
+            "reverse_hedging",
+            "coordinated_trading"
+        ]
+        
+        # Position sizing limits (more aggressive than FTMO)
+        self.max_position_size = 0.05  # 5% risk per trade
+        self.max_leverage = 500  # 1:500 leverage
+        
+        if self.debug:
+            self.log(f"Initialized {account_type} account with balance: ${initial_balance:,.2f}")
+            self.log(f"Daily loss limit: ${self.daily_loss_limit:,.2f}")
+            self.log(f"Max drawdown limit: ${self.max_drawdown_limit:,.2f}")
+            self.log(f"Consistency limit: {self.consistency_limit:.0%}")
+    
+    def validate_trade(self, trade_params):
+        """
+        Validate trade against FXIFY rules.
+        
+        Args:
+            trade_params: Dict with keys:
+                - strategy_type: str
+                - position_size: float (as percentage)
+                - leverage: float
+                - trade_frequency: int (trades per hour)
+                - is_instant_funding: bool
+                - is_ea_trade: bool
+                
+        Returns:
+            tuple: (is_compliant: bool, violations: list)
+        """
+        violations = []
+        
+        # Check if EA is allowed (forbidden in instant funding)
+        is_instant_funding = trade_params.get("is_instant_funding", False)
+        is_ea_trade = trade_params.get("is_ea_trade", False)
+        
+        if is_instant_funding and is_ea_trade:
+            violations.append("EAs are strictly forbidden in FXIFY Instant Funding accounts")
+        
+        # Check strategy type
+        strategy_type = trade_params.get("strategy_type", "").lower()
+        if strategy_type in self.restricted_strategies:
+            violations.append(f"Strategy '{strategy_type}' is prohibited by FXIFY")
+        
+        # Check position size
+        position_size = trade_params.get("position_size", 0)
+        if position_size > self.max_position_size:
+            violations.append(f"Position size {position_size:.2%} exceeds max {self.max_position_size:.2%}")
+        
+        # Check leverage
+        leverage = trade_params.get("leverage", 1)
+        if leverage > self.max_leverage:
+            violations.append(f"Leverage {leverage}:1 exceeds max {self.max_leverage}:1")
+        
+        # Check for high frequency trading
+        trade_frequency = trade_params.get("trade_frequency", 0)
+        if trade_frequency > 20:  # More than 20 trades per hour = HFT
+            violations.append(f"Trade frequency {trade_frequency}/hour suggests HFT (prohibited)")
+        
+        is_compliant = len(violations) == 0
+        
+        if not is_compliant:
+            self.log(f"Trade validation failed: {violations}")
+        
+        return is_compliant, violations
+    
+    def check_consistency_rule(self, largest_profit, total_profit):
+        """
+        Check FXIFY consistency rule.
+        
+        Args:
+            largest_profit: Largest profitable trading day
+            total_profit: Total profit
+            
+        Returns:
+            tuple: (is_compliant: bool, ratio: float, reason: str)
+        """
+        if total_profit <= 0:
+            return True, 0.0, "No profit to check consistency"
+        
+        consistency_ratio = largest_profit / total_profit
+        is_compliant = consistency_ratio <= self.consistency_limit
+        
+        reason = f"Consistency: {consistency_ratio:.1%} (limit: {self.consistency_limit:.0%})"
+        
+        if not is_compliant:
+            self.log(f"Consistency rule violated: {reason}")
+        
+        return is_compliant, consistency_ratio, reason
+
+
+# =============================================================================
+# UNIFIED COMPLIANCE CHECKER
+# =============================================================================
+
+def check_prop_firm_compliance(firm_name, trade_params, daily_pnl, equity, high_watermark, 
+                             initial_balance=100000, account_type="starter", debug=False):
+    """
+    Unified compliance checker for multiple prop firms.
+    
+    Args:
+        firm_name: "FTMO" or "FXIFY"
+        trade_params: Dict with trade parameters
+        daily_pnl: Current daily P&L
+        equity: Current equity
+        high_watermark: Peak equity
+        initial_balance: Starting balance
+        account_type: Account type (for FXIFY)
+        debug: Enable debug logging
+        
+    Returns:
+        dict: Compliance results with all checks
+    """
+    
+    # Initialize appropriate compliance checker
+    if firm_name.upper() == "FTMO":
+        compliance = FTMOCompliance(initial_balance, debug)
+    elif firm_name.upper() == "FXIFY":
+        compliance = FXIFYCompliance(initial_balance, account_type, debug)
+    else:
+        return {"error": f"Unknown firm: {firm_name}"}
+    
+    # Run all compliance checks
+    results = {
+        "firm": firm_name,
+        "account_type": account_type,
+        "overall_compliant": True,
+        "violations": []
+    }
+    
+    # Check trade validation
+    trade_compliant, trade_violations = compliance.validate_trade(trade_params)
+    results["trade_compliant"] = trade_compliant
+    results["trade_violations"] = trade_violations
+    if not trade_compliant:
+        results["overall_compliant"] = False
+        results["violations"].extend(trade_violations)
+    
+    # Check daily limits
+    daily_compliant, daily_reason = compliance.check_daily_limits(daily_pnl)
+    results["daily_compliant"] = daily_compliant
+    results["daily_reason"] = daily_reason
+    if not daily_compliant:
+        results["overall_compliant"] = False
+        results["violations"].append(daily_reason)
+    
+    # Check total drawdown
+    max_drawdown = compliance.max_loss_limit if hasattr(compliance, 'max_loss_limit') else compliance.max_drawdown_limit
+    drawdown_compliant, drawdown_reason = compliance.check_total_drawdown(equity, high_watermark, max_drawdown)
+    results["drawdown_compliant"] = drawdown_compliant
+    results["drawdown_reason"] = drawdown_reason
+    if not drawdown_compliant:
+        results["overall_compliant"] = False
+        results["violations"].append(drawdown_reason)
+    
+    # FXIFY specific: consistency check
+    if firm_name.upper() == "FXIFY" and "largest_profit" in trade_params and "total_profit" in trade_params:
+        consistency_compliant, consistency_ratio, consistency_reason = compliance.check_consistency_rule(
+            trade_params["largest_profit"], trade_params["total_profit"]
+        )
+        results["consistency_compliant"] = consistency_compliant
+        results["consistency_ratio"] = consistency_ratio
+        results["consistency_reason"] = consistency_reason
+        if not consistency_compliant:
+            results["overall_compliant"] = False
+            results["violations"].append(consistency_reason)
+    
+    return results
+
